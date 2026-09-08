@@ -81,7 +81,6 @@ export function CommunicationProvider({
             status: "calling",
             lastSeen: Date.now(),
           };
-
           setIncomingCallFrom(caller);
           setCurrentDevice(caller);
           setCallState("incoming");
@@ -105,15 +104,14 @@ export function CommunicationProvider({
 
         case "speech_message": {
           const speechMsg = msg as SpeechMessage;
-          const sender =
-            devices.find((d) => d.id === speechMsg.senderId)?.name ||
-            currentDevice?.name ||
-            "Device";
-
+          const senderName =
+            speechMsg.senderId === disc.getDeviceId()
+              ? "You (loopback)"
+              : "Remote device";
           const chatMsg: ChatMessage = {
             id: speechMsg.id,
             senderId: speechMsg.senderId,
-            senderName: sender,
+            senderName,
             text: speechMsg.text,
             timestamp: speechMsg.timestamp,
           };
@@ -134,7 +132,7 @@ export function CommunicationProvider({
           break;
       }
     },
-    [currentDevice, devices],
+    [],
   );
 
   useEffect(() => {
@@ -199,14 +197,12 @@ export function CommunicationProvider({
 
       try {
         await tcp.connectToDevice(device.ip, device.port || TCP_PORT);
-
         const msg: CallRequestMessage = {
           type: "call_request",
           senderId: deviceId,
           senderName: deviceName,
           timestamp: Date.now(),
         };
-
         await tcp.sendMessage(msg);
       } catch (error) {
         console.error("Failed to call device:", error);
@@ -218,10 +214,6 @@ export function CommunicationProvider({
     [tcp, deviceId, deviceName],
   );
 
-  /**
-   * Single-phone loopback test.
-   * Uses the real TCP server on localhost, then runs the normal call handshake.
-   */
   const selfCall = useCallback(async () => {
     if (!tcp || !deviceId) return;
 
@@ -243,23 +235,16 @@ export function CommunicationProvider({
       await tcp.startServer();
       await tcp.connectToDevice("127.0.0.1", TCP_PORT);
 
-      const request: CallRequestMessage = {
+      await tcp.sendMessage({
         type: "call_request",
         senderId: deviceId,
         senderName: deviceName || "This device",
         timestamp: Date.now(),
-      };
+      });
 
-      await tcp.sendMessage(request);
-
-      // Let the normal incoming-call handler receive the loopback request,
-      // then automatically accept it so the complete call flow is exercised.
+      // The same process receives the request through the server socket.
+      // Auto-accept so a single phone can test the complete TCP call flow.
       setTimeout(async () => {
-        setCallState((state) => {
-          if (state === "incoming") return state;
-          return state;
-        });
-
         const accept: CallAcceptMessage = {
           type: "call_accept",
           senderId: deviceId,
@@ -270,6 +255,7 @@ export function CommunicationProvider({
           await tcp.sendMessage(accept);
           setCallState("connected");
           setIncomingCallFrom(null);
+          setCurrentDevice(selfDevice);
         } catch (error) {
           console.error("Self-call accept failed:", error);
           await tcp.disconnect();
@@ -294,7 +280,6 @@ export function CommunicationProvider({
         senderId: deviceId,
         timestamp: Date.now(),
       };
-
       await tcp.sendMessage(msg);
       setCallState("connected");
       setCurrentDevice(incomingCallFrom);
@@ -362,7 +347,6 @@ export function CommunicationProvider({
       };
 
       await tcp.sendMessage(msg);
-
       setMessages((prev) => [
         ...prev,
         {
@@ -380,9 +364,7 @@ export function CommunicationProvider({
   const startSpeechRecognition = useCallback(async () => {
     const stt = getSpeechToTextService();
     const text = await stt.listenForSpeech();
-    if (text?.trim()) {
-      await sendMessage(text);
-    }
+    if (text?.trim()) await sendMessage(text);
   }, [sendMessage]);
 
   const stopSpeechRecognition = useCallback(async () => {
