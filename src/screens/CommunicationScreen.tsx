@@ -5,13 +5,46 @@ import { useCommunication } from "../context/CommunicationContext";
 import { ChatMessage as ChatMessageType } from "../types/communication";
 
 function ChatMessage({ message, isOwn }: { message: ChatMessageType; isOwn: boolean }) {
-  const time = new Date(message.timestamp).toLocaleTimeString();
+  const time = Number.isFinite(message.timestamp)
+    ? new Date(message.timestamp).toLocaleTimeString()
+    : "";
+
   return (
-    <View className={`mb-3 flex-row ${isOwn ? "justify-end" : "justify-start"}`}>
-      <View className={`max-w-xs rounded-lg px-3 py-2 ${isOwn ? "bg-blue-500" : "bg-gray-200"}`}>
-        {!isOwn && <Text className="text-xs font-semibold text-gray-600">{message.senderName}</Text>}
-        <Text className={isOwn ? "text-white" : "text-gray-900"}>{message.text}</Text>
-        <Text className={`mt-1 text-xs ${isOwn ? "text-blue-100" : "text-gray-600"}`}>{time}</Text>
+    <View
+      style={{
+        marginBottom: 12,
+        flexDirection: "row",
+        justifyContent: isOwn ? "flex-end" : "flex-start",
+      }}
+    >
+      <View
+        style={{
+          maxWidth: "80%",
+          borderRadius: 10,
+          paddingHorizontal: 12,
+          paddingVertical: 8,
+          backgroundColor: isOwn ? "#3b82f6" : "#e5e7eb",
+        }}
+      >
+        {!isOwn && (
+          <Text style={{ fontSize: 12, fontWeight: "600", color: "#4b5563" }}>
+            {String(message.senderName || "Remote device")}
+          </Text>
+        )}
+        <Text style={{ color: isOwn ? "#ffffff" : "#111827" }}>
+          {String(message.text || "")}
+        </Text>
+        {!!time && (
+          <Text
+            style={{
+              marginTop: 4,
+              fontSize: 12,
+              color: isOwn ? "#dbeafe" : "#4b5563",
+            }}
+          >
+            {time}
+          </Text>
+        )}
       </View>
     </View>
   );
@@ -71,13 +104,24 @@ export default function CommunicationScreen() {
         contentContainerStyle={{ padding: 12, paddingBottom: 120 }}
         keyboardShouldPersistTaps="handled"
       >
-        {messages.map((item) => (
-          <ChatMessage
-            key={item.id}
-            message={item}
-            isOwn={item.senderId === localDeviceId}
-          />
-        ))}
+        {Array.isArray(messages) &&
+          messages.map((item, index) => {
+            if (!item || typeof item !== "object") return null;
+            const safeItem: ChatMessageType = {
+              id: String(item.id || `message-${index}`),
+              senderId: String(item.senderId || ""),
+              senderName: String(item.senderName || "Remote device"),
+              text: String(item.text || ""),
+              timestamp: Number(item.timestamp) || Date.now(),
+            };
+            return (
+              <ChatMessage
+                key={safeItem.id}
+                message={safeItem}
+                isOwn={safeItem.senderId === localDeviceId}
+              />
+            );
+          })}
       </ScrollView>
 
       <View className="absolute bottom-0 left-0 right-0 flex-row items-center justify-center border-t border-gray-200 bg-white pb-8 pt-6">
