@@ -1,71 +1,42 @@
 import { useState } from "react";
-import { Animated, Modal, ScrollView, Text, TextInput, TouchableOpacity, View } from "react-native";
+import { Animated, Modal, Pressable, Text, TextInput, TouchableOpacity, View } from "react-native";
 import "../../global.css";
 import { useCommunication } from "../context/CommunicationContext";
 import { ChatMessage as ChatMessageType } from "../types/communication";
 
-function ChatMessage({ message, isOwn }: { message: ChatMessageType; isOwn: boolean }) {
-  const time = Number.isFinite(message.timestamp)
-    ? new Date(message.timestamp).toLocaleTimeString()
-    : "";
-
-  return (
-    <View
-      style={{
-        marginBottom: 12,
-        flexDirection: "row",
-        justifyContent: isOwn ? "flex-end" : "flex-start",
-      }}
-    >
-      <View
-        style={{
-          maxWidth: "80%",
-          borderRadius: 10,
-          paddingHorizontal: 12,
-          paddingVertical: 8,
-          backgroundColor: isOwn ? "#3b82f6" : "#e5e7eb",
-        }}
-      >
-        {!isOwn && (
-          <Text style={{ fontSize: 12, fontWeight: "600", color: "#4b5563" }}>
-            {String(message.senderName || "Remote device")}
-          </Text>
-        )}
-        <Text style={{ color: isOwn ? "#ffffff" : "#111827" }}>
-          {String(message.text || "")}
-        </Text>
-        {!!time && (
-          <Text
-            style={{
-              marginTop: 4,
-              fontSize: 12,
-              color: isOwn ? "#dbeafe" : "#4b5563",
-            }}
-          >
-            {time}
-          </Text>
-        )}
-      </View>
-    </View>
-  );
-}
-
 export default function CommunicationScreen() {
-  const { messages, currentDevice, localDeviceId, sendMessage, endCall } = useCommunication();
+  const {
+    messages,
+    currentDevice,
+    localDeviceId,
+    sendMessage,
+    endCall,
+    startSpeechRecognition,
+    stopSpeechRecognition,
+  } = useCommunication();
   const [isListening, setIsListening] = useState(false);
   const [pressScale] = useState(new Animated.Value(1));
   const [messageText, setMessageText] = useState("");
   const [showTextInput, setShowTextInput] = useState(false);
 
-  const handleMicPress = () => {
-    setShowTextInput(true);
+  const handleMicPress = async () => {
     setIsListening(true);
     Animated.spring(pressScale, { toValue: 0.8, useNativeDriver: true }).start();
+    try {
+      await startSpeechRecognition();
+    } catch (error) {
+      console.error("Speech recognition failed:", error);
+    }
   };
 
-  const handleMicRelease = () => {
+  const handleMicRelease = async () => {
     setIsListening(false);
     Animated.spring(pressScale, { toValue: 1, useNativeDriver: true }).start();
+    try {
+      await stopSpeechRecognition();
+    } catch (error) {
+      console.error("Failed to stop speech recognition:", error);
+    }
   };
 
   const handleSendMessage = async () => {
@@ -74,77 +45,177 @@ export default function CommunicationScreen() {
       await sendMessage(messageText);
       setMessageText("");
       setShowTextInput(false);
-      setIsListening(false);
     } catch (error) {
       console.error("Failed to send message:", error);
     }
   };
 
-  const handleCancelInput = () => {
-    setMessageText("");
-    setShowTextInput(false);
-    setIsListening(false);
-  };
-
   return (
-    <View className="flex-1 bg-white">
-      <View className="border-b border-gray-200 bg-gray-50 px-6 py-4 pt-12">
-        <View className="flex-row items-center justify-between">
+    <View style={{ flex: 1, backgroundColor: "#fff" }}>
+      <View
+        style={{
+          borderBottomWidth: 1,
+          borderBottomColor: "#e5e7eb",
+          backgroundColor: "#f9fafb",
+          paddingHorizontal: 24,
+          paddingTop: 48,
+          paddingBottom: 16,
+        }}
+      >
+        <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
           <View>
-            <Text className="text-lg font-bold text-gray-900">{currentDevice?.name || "Connected"}</Text>
-            <Text className="text-sm text-green-600">Connected</Text>
+            <Text style={{ fontSize: 18, fontWeight: "700", color: "#111827" }}>
+              {currentDevice?.name || "Connected"}
+            </Text>
+            <Text style={{ fontSize: 14, color: "#16a34a", marginTop: 2 }}>Connected</Text>
           </View>
-          <TouchableOpacity onPress={endCall} className="rounded-lg bg-red-500 px-4 py-2">
-            <Text className="font-semibold text-white">End Call</Text>
+          <TouchableOpacity
+            onPress={endCall}
+            style={{ backgroundColor: "#ef4444", borderRadius: 8, paddingHorizontal: 16, paddingVertical: 9 }}
+          >
+            <Text style={{ fontWeight: "600", color: "#fff" }}>End Call</Text>
           </TouchableOpacity>
         </View>
       </View>
 
-      <ScrollView
-        contentContainerStyle={{ padding: 12, paddingBottom: 120 }}
-        keyboardShouldPersistTaps="handled"
-      >
-        {Array.isArray(messages) &&
-          messages.map((item, index) => {
-            if (!item || typeof item !== "object") return null;
-            const safeItem: ChatMessageType = {
-              id: String(item.id || `message-${index}`),
-              senderId: String(item.senderId || ""),
-              senderName: String(item.senderName || "Remote device"),
-              text: String(item.text || ""),
-              timestamp: Number(item.timestamp) || Date.now(),
-            };
-            return (
-              <ChatMessage
-                key={safeItem.id}
-                message={safeItem}
-                isOwn={safeItem.senderId === localDeviceId}
-              />
-            );
-          })}
-      </ScrollView>
+      <View style={{ flex: 1, padding: 12 }}>
+        {messages.map((item: ChatMessageType, index) => {
+          const safeItem: ChatMessageType = {
+            id: typeof item?.id === "string" ? item.id : `message-${index}`,
+            senderId: typeof item?.senderId === "string" ? item.senderId : "unknown",
+            senderName: typeof item?.senderName === "string" ? item.senderName : "Unknown",
+            text: typeof item?.text === "string" ? item.text : String(item?.text ?? ""),
+            timestamp: typeof item?.timestamp === "number" ? item.timestamp : Date.now(),
+          };
+          const own = safeItem.senderId === localDeviceId;
 
-      <View className="absolute bottom-0 left-0 right-0 flex-row items-center justify-center border-t border-gray-200 bg-white pb-8 pt-6">
-        <TouchableOpacity onPressIn={handleMicPress} onPressOut={handleMicRelease} activeOpacity={0.8}>
-          <Animated.View style={{ transform: [{ scale: pressScale }] }} className="h-20 w-20 items-center justify-center rounded-full bg-blue-500">
-            <Text className="text-3xl">🎙️</Text>
-          </Animated.View>
-        </TouchableOpacity>
-        <View className="ml-4">
-          <Text className="text-sm font-semibold text-gray-900">Hold to compose</Text>
-          <Text className="text-xs text-gray-500">Text fallback for MVP testing</Text>
+          return (
+            <View
+              key={safeItem.id}
+              style={{
+                marginBottom: 12,
+                flexDirection: "row",
+                justifyContent: own ? "flex-end" : "flex-start",
+              }}
+            >
+              <View
+                style={{
+                  maxWidth: "80%",
+                  borderRadius: 10,
+                  paddingHorizontal: 12,
+                  paddingVertical: 9,
+                  backgroundColor: own ? "#3b82f6" : "#e5e7eb",
+                }}
+              >
+                {!own && (
+                  <Text style={{ fontSize: 12, fontWeight: "600", color: "#4b5563", marginBottom: 2 }}>
+                    {safeItem.senderName}
+                  </Text>
+                )}
+                <Text style={{ color: own ? "#fff" : "#111827", fontSize: 15 }}>
+                  {safeItem.text}
+                </Text>
+                <Text
+                  style={{
+                    marginTop: 4,
+                    fontSize: 11,
+                    color: own ? "#dbeafe" : "#6b7280",
+                  }}
+                >
+                  {new Date(safeItem.timestamp).toLocaleTimeString()}
+                </Text>
+              </View>
+            </View>
+          );
+        })}
+      </View>
+
+      <View
+        style={{
+          borderTopWidth: 1,
+          borderTopColor: "#e5e7eb",
+          backgroundColor: "#fff",
+          paddingTop: 20,
+          paddingBottom: 32,
+          alignItems: "center",
+        }}
+      >
+        <View style={{ flexDirection: "row", alignItems: "center" }}>
+          <Pressable onPressIn={handleMicPress} onPressOut={handleMicRelease}>
+            <Animated.View
+              style={{
+                width: 80,
+                height: 80,
+                borderRadius: 40,
+                backgroundColor: isListening ? "#dc2626" : "#3b82f6",
+                alignItems: "center",
+                justifyContent: "center",
+                transform: [{ scale: pressScale }],
+              }}
+            >
+              <Text style={{ fontSize: 30 }}>🎙️</Text>
+            </Animated.View>
+          </Pressable>
+
+          <View style={{ marginLeft: 16 }}>
+            <Text style={{ fontSize: 14, fontWeight: "600", color: "#111827" }}>
+              {isListening ? "Listening…" : "Hold to speak"}
+            </Text>
+            <Text style={{ fontSize: 12, color: "#6b7280", marginTop: 2 }}>
+              Native Android speech recognition
+            </Text>
+            <TouchableOpacity onPress={() => setShowTextInput(true)} style={{ marginTop: 6 }}>
+              <Text style={{ fontSize: 12, color: "#2563eb" }}>Use text fallback</Text>
+            </TouchableOpacity>
+          </View>
         </View>
       </View>
 
-      <Modal visible={showTextInput} transparent animationType="slide" onRequestClose={handleCancelInput}>
-        <View className="flex-1 bg-black/50 p-6 pt-32">
-          <View className="rounded-lg bg-white p-6">
-            <Text className="text-xl font-bold text-gray-900">Send Message</Text>
-            <Text className="mt-1 text-sm text-gray-500">This tests TCP + receiver TTS while native STT is added.</Text>
-            <TextInput autoFocus placeholder="Type your message..." value={messageText} onChangeText={setMessageText} multiline numberOfLines={4} className="mt-4 rounded-lg border border-gray-300 p-3 text-gray-900" placeholderTextColor="#999" />
-            <View className="mt-6 flex-row justify-end gap-3">
-              <TouchableOpacity onPress={handleCancelInput} className="rounded-lg bg-gray-300 px-4 py-2"><Text className="font-semibold text-gray-900">Cancel</Text></TouchableOpacity>
-              <TouchableOpacity onPress={handleSendMessage} disabled={!messageText.trim()} className={`rounded-lg px-4 py-2 ${messageText.trim() ? "bg-blue-500" : "bg-gray-300"}`}><Text className="font-semibold text-white">Send</Text></TouchableOpacity>
+      <Modal visible={showTextInput} transparent animationType="slide" onRequestClose={() => setShowTextInput(false)}>
+        <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.5)", padding: 24, paddingTop: 128 }}>
+          <View style={{ borderRadius: 10, backgroundColor: "#fff", padding: 24 }}>
+            <Text style={{ fontSize: 20, fontWeight: "700", color: "#111827" }}>Send Message</Text>
+            <Text style={{ marginTop: 4, fontSize: 14, color: "#6b7280" }}>
+              Manual fallback if speech recognition is unavailable.
+            </Text>
+            <TextInput
+              autoFocus
+              placeholder="Type your message..."
+              value={messageText}
+              onChangeText={setMessageText}
+              multiline
+              numberOfLines={4}
+              placeholderTextColor="#999"
+              style={{
+                marginTop: 16,
+                minHeight: 100,
+                borderWidth: 1,
+                borderColor: "#d1d5db",
+                borderRadius: 8,
+                padding: 12,
+                color: "#111827",
+                textAlignVertical: "top",
+              }}
+            />
+            <View style={{ marginTop: 20, flexDirection: "row", justifyContent: "flex-end", gap: 12 }}>
+              <TouchableOpacity
+                onPress={() => setShowTextInput(false)}
+                style={{ backgroundColor: "#d1d5db", borderRadius: 8, paddingHorizontal: 16, paddingVertical: 9 }}
+              >
+                <Text style={{ fontWeight: "600", color: "#111827" }}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={handleSendMessage}
+                disabled={!messageText.trim()}
+                style={{
+                  backgroundColor: messageText.trim() ? "#3b82f6" : "#d1d5db",
+                  borderRadius: 8,
+                  paddingHorizontal: 16,
+                  paddingVertical: 9,
+                }}
+              >
+                <Text style={{ fontWeight: "600", color: "#fff" }}>Send</Text>
+              </TouchableOpacity>
             </View>
           </View>
         </View>
