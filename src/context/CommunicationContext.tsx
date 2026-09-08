@@ -48,9 +48,9 @@ interface CommunicationContextType {
   cleanup: () => Promise<void>;
 }
 
-export const CommunicationContext = createContext<
-  CommunicationContextType | undefined
->(undefined);
+export const CommunicationContext = createContext<CommunicationContextType | undefined>(
+  undefined,
+);
 
 export function CommunicationProvider({
   children,
@@ -116,7 +116,13 @@ export function CommunicationProvider({
             timestamp: speechMsg.timestamp,
           };
 
-          setMessages((prev) => [...prev, chatMsg]);
+          // TCP loopback sends our own message back to this same process.
+          // Do not add it twice if sendMessage() already added it locally.
+          setMessages((prev) =>
+            prev.some((item) => item.id === chatMsg.id)
+              ? prev
+              : [...prev, chatMsg],
+          );
           void getTextToSpeechService().speak(speechMsg.text);
           break;
         }
@@ -242,8 +248,6 @@ export function CommunicationProvider({
         timestamp: Date.now(),
       });
 
-      // The same process receives the request through the server socket.
-      // Auto-accept so a single phone can test the complete TCP call flow.
       setTimeout(async () => {
         const accept: CallAcceptMessage = {
           type: "call_accept",
@@ -347,16 +351,20 @@ export function CommunicationProvider({
       };
 
       await tcp.sendMessage(msg);
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: msg.id,
-          senderId: deviceId,
-          senderName: deviceName || "You",
-          text: trimmed,
-          timestamp: msg.timestamp,
-        },
-      ]);
+      setMessages((prev) =>
+        prev.some((item) => item.id === msg.id)
+          ? prev
+          : [
+              ...prev,
+              {
+                id: msg.id,
+                senderId: deviceId,
+                senderName: deviceName || "You",
+                text: trimmed,
+                timestamp: msg.timestamp,
+              },
+            ],
+      );
     },
     [tcp, deviceId, deviceName],
   );
@@ -409,9 +417,7 @@ export function CommunicationProvider({
 export function useCommunication() {
   const context = React.useContext(CommunicationContext);
   if (!context) {
-    throw new Error(
-      "useCommunication must be used within CommunicationProvider",
-    );
+    throw new Error("useCommunication must be used within CommunicationProvider");
   }
   return context;
 }
