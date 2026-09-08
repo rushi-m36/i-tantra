@@ -1,10 +1,31 @@
-import { Text, View } from "react-native";
+import { useRouter } from "expo-router";
+import { useEffect } from "react";
 import "../../global.css";
+import { IncomingCallModal } from "../components/IncomingCallModal";
+import { useCommunication } from "../context/CommunicationContext";
+import AvailableDevicesScreen from "../screens/AvailableDevicesScreen";
+import CommunicationScreen from "../screens/CommunicationScreen";
 
 export default function App() {
+  const router = useRouter();
+  const { callState } = useCommunication();
+
+  useEffect(() => {
+    if (callState === "connected") {
+      router.push("/communication");
+    } else if (callState === "idle" && router.canGoBack()) {
+      router.back();
+    }
+  }, [callState, router]);
+
   return (
-    <View className="flex-1 bg-white px-6 pt-16">
-      <Text className="text-3xl font-bold text-black">Available Devices</Text>
-    </View>
+    <>
+      {callState === "connected" ? (
+        <CommunicationScreen />
+      ) : (
+        <AvailableDevicesScreen />
+      )}
+      <IncomingCallModal />
+    </>
   );
 }
