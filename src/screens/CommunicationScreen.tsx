@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Animated, FlatList, Modal, Text, TextInput, TouchableOpacity, View } from "react-native";
+import { Animated, Modal, ScrollView, Text, TextInput, TouchableOpacity, View } from "react-native";
 import "../../global.css";
 import { useCommunication } from "../context/CommunicationContext";
 import { ChatMessage as ChatMessageType } from "../types/communication";
@@ -67,12 +67,18 @@ export default function CommunicationScreen() {
         </View>
       </View>
 
-      <FlatList
-        data={messages}
-        keyExtractor={(item) => item.id}
-        renderItem={({ item }) => <ChatMessage message={item} isOwn={item.senderId === localDeviceId} />}
+      <ScrollView
         contentContainerStyle={{ padding: 12, paddingBottom: 120 }}
-      />
+        keyboardShouldPersistTaps="handled"
+      >
+        {messages.map((item) => (
+          <ChatMessage
+            key={item.id}
+            message={item}
+            isOwn={item.senderId === localDeviceId}
+          />
+        ))}
+      </ScrollView>
 
       <View className="absolute bottom-0 left-0 right-0 flex-row items-center justify-center border-t border-gray-200 bg-white pb-8 pt-6">
         <TouchableOpacity onPressIn={handleMicPress} onPressOut={handleMicRelease} activeOpacity={0.8}>
