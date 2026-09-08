@@ -5,6 +5,23 @@ import { MessageProtocol } from "./messageProtocol";
 const SERVER_PORT = 5555;
 const TCP_TIMEOUT = 10000;
 
+/** Convert react-native-tcp-socket data into UTF-8 text without relying on Node's Buffer global. */
+const decodeTcpData = (data: any): string => {
+  if (typeof data === "string") return data;
+
+  if (data && typeof data.toString === "function") {
+    // react-native-tcp-socket exposes socket data with a Buffer-like toString method.
+    const decoded = data.toString("utf8");
+    if (typeof decoded === "string") return decoded;
+  }
+
+  if (data instanceof Uint8Array) {
+    return new TextDecoder("utf-8").decode(data);
+  }
+
+  throw new Error("Unsupported TCP data type");
+};
+
 export class TCPService {
   private serverId: string;
   private serverSocket: any = null;
@@ -41,7 +58,7 @@ export class TCPService {
 
           socket.on("data", (data: any) => {
             try {
-              const dataStr = Buffer.from(data).toString("utf-8");
+              const dataStr = decodeTcpData(data);
               const { messages } = this.messageProtocol.processData(dataStr);
               messages.forEach((msg) => {
                 this.messageCallbacks.forEach((cb) => cb(msg));
@@ -158,7 +175,7 @@ export class TCPService {
 
         socket.on("data", (data: any) => {
           try {
-            const dataStr = Buffer.from(data).toString("utf-8");
+            const dataStr = decodeTcpData(data);
             const { messages } = this.messageProtocol.processData(dataStr);
             messages.forEach((msg) => {
               this.messageCallbacks.forEach((cb) => cb(msg));
