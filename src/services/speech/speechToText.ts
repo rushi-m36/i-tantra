@@ -188,6 +188,11 @@ export class SpeechToTextService {
   }
 
   private resolveSingleUse(text: string): void {
+    // A final result can arrive before Android emits the `end` event. Since
+    // this method removes the end listener, explicitly reset the state here
+    // so the next microphone press can start a new recognition session.
+    this.isListening = false;
+
     const resolve = this.singleUseResolve;
     this.singleUseResolve = null;
     this.singleUseReject = null;
@@ -196,6 +201,8 @@ export class SpeechToTextService {
   }
 
   private rejectSingleUse(error: Error): void {
+    this.isListening = false;
+
     const reject = this.singleUseReject;
     this.singleUseResolve = null;
     this.singleUseReject = null;
