@@ -1,162 +1,234 @@
-/**
- * Speech-to-Text Service
- *
- * For MVP: Uses text input as fallback
- * TODO: Replace with proper Android STT (expo-speech-recognition or similar when available)
- *
- * The proper STT implementation will come from an Expo-compatible library.
- * For now, we use text input to allow testing the full chat flow.
- */
+import {
+  ExpoSpeechRecognitionModule,
+  type EventSubscription,
+} from "expo-speech-recognition";
 
 export interface STTModalState {
   visible: boolean;
   onSubmit?: (text: string) => void;
 }
 
+/**
+ * Native Android/iOS speech recognition backed by the platform SpeechRecognizer APIs.
+ * Android uses the device's configured speech recognition service (typically Google).
+ */
 export class SpeechToTextService {
-  private isListening: boolean = false;
+  private isListening = false;
   private onResultsCallbacks: Array<(text: string) => void> = [];
   private onErrorCallbacks: Array<(error: string) => void> = [];
   private onStartCallbacks: Array<() => void> = [];
   private onEndCallbacks: Array<() => void> = [];
+  private resultSubscription: EventSubscription | null = null;
+  private errorSubscription: EventSubscription | null = null;
+  private startSubscription: EventSubscription | null = null;
+  private endSubscription: EventSubscription | null = null;
   private singleUseResolve: ((text: string) => void) | null = null;
-  private modalState: STTModalState = { visible: false };
+  private singleUseReject: ((error: Error) => void) | null = null;
 
   constructor() {
-    this.initialize();
+    console.log("STT Service initialized (native speech recognition)");
   }
 
-  private async initialize(): Promise<void> {
-    console.log("STT Service initialized (MVP: text input fallback)");
-  }
+  async listenForSpeech(locale = "en-IN"): Promise<string> {
+    if (this.isListening) return "";
 
-  /**
-   * Start listening and wait for result (one-time use)
-   * For MVP: This will show a text input modal
-   */
-  async listenForSpeech(): Promise<string> {
-    return new Promise((resolve) => {
+    return new Promise(async (resolve, reject) => {
       this.singleUseResolve = resolve;
-      this.startListening();
+      this.singleUseReject = reject;
+
+      this.removeNativeListeners();
+
+      this.startSubscription = ExpoSpeechRecognitionModule.addListener(
+        "start",
+        () => {
+          this.isListening = true;
+          this.onStartCallbacks.forEach((cb) => cb());
+        },
+      );
+
+      this.endSubscription = ExpoSpeechRecognitionModule.addListener(
+        "end",
+        () => {
+          this.isListening = false;
+          this.onEndCallbacks.forEach((cb) => cb());
+        },
+      );
+
+      this.resultSubscription = ExpoSpeechRecognitionModule.addListener(
+        "result",
+        (event) => {
+          const text = event.results?.[0]?.transcript?.trim() ?? "";
+          if (!text) return;
+
+          this.onResultsCallbacks.forEach((cb) => cb(text));
+
+          if (event.isFinal) {
+            this.resolveSingleUse(text);
+          }
+        },
+      );
+
+      this.errorSubscription = ExpoSpeechRecognitionModule.addListener(
+        "error",
+        (event) => {
+          const message = event.message || event.error || "Speech recognition error";
+          console.error("STT error:", event.error, message, event.code);
+          this.onErrorCallbacks.forEach((cb) => cb(message));
+          this.rejectSingleUse(new Error(message));
+        },
+      );
+
+      try {
+        const permission =
+          await ExpoSpeechRecognitionModule.requestPermissionsAsync();
+        if (!permission.granted) {
+          throw new Error("Microphone/speech recognition permission was denied");
+        }
+
+        if (!ExpoSpeechRecognitionModule.isRecognitionAvailable()) {
+          throw new Error("No speech recognition service is available on this device");
+        }
+
+        ExpoSpeechRecognitionModule.start({
+          lang: locale,
+          interimResults: true,
+          maxAlternatives: 1,
+          continuous: false,
+          requiresOnDeviceRecognition: false,
+          addsPunctuation: false,
+        });
+      } catch (error) {
+        const err = error instanceof Error ? error : new Error(String(error));
+        this.rejectSingleUse(err);
+      }
     });
   }
 
-  /**
-   * Signal to show text input modal
-   */
-  getModalState(): STTModalState {
-    return this.modalState;
-  }
+  async startListening(locale = "en-IN"): Promise<void> {
+    if (this.isListening) return;
 
-  /**
-   * Handle text input submission
-   */
-  handleTextInput(text: string): void {
-    if (this.singleUseResolve) {
-      this.singleUseResolve(text);
-      this.singleUseResolve = null;
-    }
-
-    this.onResultsCallbacks.forEach((cb) => cb(text));
-    this.stopListening();
-  }
-
-  /**
-   * Start listening for speech
-   */
-  async startListening(): Promise<void> {
     try {
-      if (this.isListening) return;
+      const permission = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
+      if (!permission.granted) {
+        throw new Error("Microphone permission was denied");
+      }
 
-      this.isListening = true;
-      this.modalState = { visible: true };
-      this.onStartCallbacks.forEach((cb) => cb());
-    } catch (e) {
-      console.error("Failed to start listening:", e);
+      if (!ExpoSpeechRecognitionModule.isRecognitionAvailable()) {
+        throw new Error("No speech recognition service is available on this device");
+      }
+
+      this.removeNativeListeners();
+      this.startSubscription = ExpoSpeechRecognitionModule.addListener("start", () => {
+        this.isListening = true;
+        this.onStartCallbacks.forEach((cb) => cb());
+      });
+      this.endSubscription = ExpoSpeechRecognitionModule.addListener("end", () => {
+        this.isListening = false;
+        this.onEndCallbacks.forEach((cb) => cb());
+      });
+      this.errorSubscription = ExpoSpeechRecognitionModule.addListener("error", (event) => {
+        const message = event.message || event.error || "Speech recognition error";
+        console.error("STT error:", event.error, message, event.code);
+        this.onErrorCallbacks.forEach((cb) => cb(message));
+      });
+
+      ExpoSpeechRecognitionModule.start({
+        lang: locale,
+        interimResults: true,
+        maxAlternatives: 1,
+        continuous: false,
+        requiresOnDeviceRecognition: false,
+        addsPunctuation: false,
+      });
+    } catch (error) {
       this.isListening = false;
-      throw e;
+      console.error("Failed to start speech recognition:", error);
+      throw error;
     }
   }
 
-  /**
-   * Stop listening
-   */
   async stopListening(): Promise<void> {
-    try {
-      if (!this.isListening) return;
-
-      this.isListening = false;
-      this.modalState = { visible: false };
-      this.onEndCallbacks.forEach((cb) => cb());
-    } catch (e) {
-      console.error("Failed to stop listening:", e);
-      throw e;
-    }
+    if (!this.isListening) return;
+    ExpoSpeechRecognitionModule.stop();
   }
 
-  /**
-   * Cancel listening
-   */
   async cancel(): Promise<void> {
-    try {
-      this.isListening = false;
-      this.modalState = { visible: false };
-      this.singleUseResolve = null;
-    } catch (e) {
-      console.error("Failed to cancel listening:", e);
-    }
+    ExpoSpeechRecognitionModule.abort();
+    this.isListening = false;
+    this.rejectSingleUse(new Error("Speech recognition cancelled"));
+    this.removeNativeListeners();
   }
 
-  /**
-   * Register callback for results
-   */
+  getModalState(): STTModalState {
+    return { visible: this.isListening };
+  }
+
+  handleTextInput(text: string): void {
+    this.resolveSingleUse(text.trim());
+  }
+
   onResults(callback: (text: string) => void): void {
     this.onResultsCallbacks.push(callback);
   }
 
-  /**
-   * Register callback for errors
-   */
   onError(callback: (error: string) => void): void {
     this.onErrorCallbacks.push(callback);
   }
 
-  /**
-   * Register callback for start
-   */
   onStart(callback: () => void): void {
     this.onStartCallbacks.push(callback);
   }
 
-  /**
-   * Register callback for end
-   */
   onEnd(callback: () => void): void {
     this.onEndCallbacks.push(callback);
   }
 
-  /**
-   * Check if currently listening
-   */
   getIsListening(): boolean {
     return this.isListening;
   }
 
-  /**
-   * Cleanup
-   */
+  private resolveSingleUse(text: string): void {
+    const resolve = this.singleUseResolve;
+    this.singleUseResolve = null;
+    this.singleUseReject = null;
+    this.removeNativeListeners();
+    if (text) resolve?.(text);
+  }
+
+  private rejectSingleUse(error: Error): void {
+    const reject = this.singleUseReject;
+    this.singleUseResolve = null;
+    this.singleUseReject = null;
+    this.removeNativeListeners();
+    reject?.(error);
+  }
+
+  private removeNativeListeners(): void {
+    this.resultSubscription?.remove();
+    this.errorSubscription?.remove();
+    this.startSubscription?.remove();
+    this.endSubscription?.remove();
+    this.resultSubscription = null;
+    this.errorSubscription = null;
+    this.startSubscription = null;
+    this.endSubscription = null;
+  }
+
   async cleanup(): Promise<void> {
     try {
-      this.isListening = false;
-      this.modalState = { visible: false };
-      this.singleUseResolve = null;
-      this.onResultsCallbacks = [];
-      this.onErrorCallbacks = [];
-      this.onStartCallbacks = [];
-      this.onEndCallbacks = [];
-    } catch (e) {
-      console.error("Failed to cleanup STT:", e);
+      if (this.isListening) ExpoSpeechRecognitionModule.abort();
+    } catch {
+      // Ignore cleanup errors.
     }
+
+    this.isListening = false;
+    this.singleUseResolve = null;
+    this.singleUseReject = null;
+    this.removeNativeListeners();
+    this.onResultsCallbacks = [];
+    this.onErrorCallbacks = [];
+    this.onStartCallbacks = [];
+    this.onEndCallbacks = [];
   }
 }
 
