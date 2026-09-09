@@ -65,10 +65,17 @@ export class DeviceDiscovery {
     try {
       const state = await NetInfo.fetch();
       const details = state.details as any;
-      if (state.type === "wifi" && details?.ipAddress) {
-        return { ip: details.ipAddress, subnet: details.subnet || "255.255.255.0", isWifi: true };
-      }
-      return null;
+      const ip = typeof details?.ipAddress === "string" ? details.ipAddress : null;
+      if (!ip) return null;
+
+      const subnet =
+        typeof details?.subnet === "string" && details.subnet.length > 0
+          ? details.subnet
+          : "255.255.255.0";
+
+      const isWifi = state.type === "wifi";
+      console.log(`Network available: ${state.type}, IP ${ip}, subnet ${subnet}`);
+      return { ip, subnet, isWifi };
     } catch (e) {
       console.error("Failed to get network info:", e);
       return null;
@@ -163,9 +170,10 @@ export class DeviceDiscovery {
       if (!network) {
         this.scanStatus = { scanning: false, currentIp: null, scanned: 0, total: 0, found: this.discoveredDevices.size };
         this.notifyScanStatus();
-        console.log("Device discovery skipped: not connected to Wi-Fi");
+        console.log("Device discovery skipped: no local IPv4 address");
         return;
       }
+
       const addresses = this.getSubnetAddresses(network.ip, network.subnet);
       this.scanStatus = { scanning: true, currentIp: null, scanned: 0, total: addresses.length, found: this.discoveredDevices.size };
       this.notifyScanStatus();
@@ -246,8 +254,12 @@ export class DeviceDiscovery {
       };
 
       try {
+        // Do not force the Android "wifi" interface here. Android can report
+        // hotspot/USB/local connections as another NetInfo type while still
+        // providing a perfectly valid local route. Let the OS choose the
+        // correct interface for the destination IP.
         socket = TcpSocket.createConnection(
-          { host: ip, port: DISCOVERY_PORT, interface: "wifi", reuseAddress: true, connectTimeout: CONNECT_TIMEOUT },
+          { host: ip, port: DISCOVERY_PORT, reuseAddress: true, connectTimeout: CONNECT_TIMEOUT },
           () => socket.write(`${DISCOVERY_REQUEST}\n`),
         );
         timer = setTimeout(finish, CONNECT_TIMEOUT + 300);
