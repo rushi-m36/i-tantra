@@ -10,7 +10,8 @@ export interface STTModalState {
 
 /**
  * Native Android/iOS speech recognition backed by the platform SpeechRecognizer APIs.
- * Android uses the device's configured speech recognition service (typically Google).
+ * Android is configured for on-device recognition so speech recognition does not
+ * depend on an internet connection when the device has an offline language pack.
  */
 export class SpeechToTextService {
   private isListening = false;
@@ -94,7 +95,7 @@ export class SpeechToTextService {
           interimResults: true,
           maxAlternatives: 1,
           continuous: false,
-          requiresOnDeviceRecognition: false,
+          requiresOnDeviceRecognition: true,
           addsPunctuation: false,
         });
       } catch (error) {
@@ -137,7 +138,7 @@ export class SpeechToTextService {
         interimResults: true,
         maxAlternatives: 1,
         continuous: false,
-        requiresOnDeviceRecognition: false,
+        requiresOnDeviceRecognition: true,
         addsPunctuation: false,
       });
     } catch (error) {
@@ -188,9 +189,6 @@ export class SpeechToTextService {
   }
 
   private resolveSingleUse(text: string): void {
-    // A final result can arrive before Android emits the `end` event. Since
-    // this method removes the end listener, explicitly reset the state here
-    // so the next microphone press can start a new recognition session.
     this.isListening = false;
 
     const resolve = this.singleUseResolve;
