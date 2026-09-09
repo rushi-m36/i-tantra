@@ -2,7 +2,9 @@ package com.rushi36.itantra
 
 import expo.modules.splashscreen.SplashScreenManager
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.Build
@@ -19,20 +21,46 @@ class MainActivity : ReactActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     SplashScreenManager.registerOnActivity(this)
     super.onCreate(null)
-    startDiscoveryServiceIfWifiConnected()
+
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+      checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+    ) {
+      requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1001)
+    }
   }
 
-  private fun startDiscoveryServiceIfWifiConnected() {
-    val connectivityManager = getSystemService(ConnectivityManager::class.java)
-    val network = connectivityManager.activeNetwork ?: return
-    val capabilities = connectivityManager.getNetworkCapabilities(network) ?: return
-    if (!capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) return
+  override fun onResume() {
+    super.onResume()
+    stopBackgroundDiscoveryService()
+  }
 
+  override fun onPause() {
+    super.onPause()
+    startBackgroundDiscoveryServiceIfWifiConnected()
+  }
+
+  private fun isWifiConnected(): Boolean {
+    val connectivityManager = getSystemService(ConnectivityManager::class.java)
+    val network = connectivityManager.activeNetwork ?: return false
+    val capabilities = connectivityManager.getNetworkCapabilities(network) ?: return false
+    return capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+  }
+
+  private fun startBackgroundDiscoveryServiceIfWifiConnected() {
+    if (!isWifiConnected()) return
     val intent = Intent(this, DiscoveryService::class.java)
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
       startForegroundService(intent)
     } else {
       startService(intent)
+    }
+  }
+
+  private fun stopBackgroundDiscoveryService() {
+    try {
+      stopService(Intent(this, DiscoveryService::class.java))
+    } catch (_: Exception) {
+      // Service may already be stopped.
     }
   }
 
