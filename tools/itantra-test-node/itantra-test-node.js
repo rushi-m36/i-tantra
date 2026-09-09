@@ -2,6 +2,7 @@
 'use strict';
 
 const net = require('node:net');
+const os = require('node:os');
 const readline = require('node:readline');
 const crypto = require('node:crypto');
 
@@ -37,18 +38,10 @@ function handleMessage(message) {
       console.log(`\n>>> INCOMING CALL REQUEST from ${message.senderName || message.senderId || 'iTantra device'}`);
       console.log('>>> Type: accept or reject');
       break;
-    case 'call_accept':
-      console.log('\n>>> CALL ACCEPTED');
-      break;
-    case 'call_reject':
-      console.log('\n>>> CALL REJECTED');
-      break;
-    case 'speech_message':
-      console.log(`\n>>> MESSAGE: ${message.text || ''}`);
-      break;
-    case 'call_end':
-      console.log('\n>>> CALL ENDED');
-      break;
+    case 'call_accept': console.log('\n>>> CALL ACCEPTED'); break;
+    case 'call_reject': console.log('\n>>> CALL REJECTED'); break;
+    case 'speech_message': console.log(`\n>>> MESSAGE: ${message.text || ''}`); break;
+    case 'call_end': console.log('\n>>> CALL ENDED'); break;
   }
 }
 
@@ -82,9 +75,12 @@ function attachSocket(newSocket) {
 }
 
 function startServer() {
-  if (server) { console.log(`Server is already listening on ${PORT}.`); return; }
+  if (server) { console.log(`TCP server is already listening on ${PORT}.`); return; }
   server = net.createServer(attachSocket);
-  server.on('error', error => console.error(`\nServer error: ${error.message}`));
+  server.on('error', error => {
+    console.error(`\nServer error: ${error.message}`);
+    if (error.code === 'EADDRINUSE') console.error(`Port ${PORT} is already in use.`);
+  });
   server.listen(PORT, '0.0.0.0', () => {
     console.log(`\nTCP server listening on 0.0.0.0:${PORT}`);
     console.log('Phone can connect to this laptop on TCP port 5555.');
@@ -109,7 +105,10 @@ function startDiscoveryServer() {
       console.log(`[DISCOVERY] Sent ${DEFAULT_NAME} to ${remote}`);
     });
   });
-  discoveryServer.on('error', error => console.error(`\nDiscovery server error: ${error.message}`));
+  discoveryServer.on('error', error => {
+    console.error(`\nDiscovery server error: ${error.message}`);
+    if (error.code === 'EADDRINUSE') console.error(`Port ${DISCOVERY_PORT} is already in use.`);
+  });
   discoveryServer.listen(DISCOVERY_PORT, '0.0.0.0', () => {
     console.log(`\nDiscovery server listening on 0.0.0.0:${DISCOVERY_PORT}`);
     console.log('Phones can discover this laptop.');
@@ -118,7 +117,6 @@ function startDiscoveryServer() {
 }
 
 function getLocalIPv4() {
-  const os = require('node:os');
   const interfaces = os.networkInterfaces();
   const addresses = [];
   for (const [name, entries] of Object.entries(interfaces)) {
@@ -127,6 +125,14 @@ function getLocalIPv4() {
     }
   }
   return addresses;
+}
+
+function selectScanInterfaces() {
+  const addresses = getLocalIPv4();
+  const preferred = addresses.filter(x => /wi-?fi|wlan|wireless/i.test(x.name));
+  const ethernet = addresses.filter(x => !/loopback|wi-?fi|wlan|wireless|virtual|vmware|vbox|bluetooth|usb|rndis|tether/i.test(x.name));
+  const selected = preferred.length ? preferred : ethernet;
+  return selected.length ? selected : addresses;
 }
 
 function ipToInt(ip) { return ip.split('.').reduce((n, p) => ((n << 8) | Number(p)) >>> 0, 0); }
@@ -145,9 +151,7 @@ function getSubnetAddresses(ip, mask) {
 
 function probeDevice(ip) {
   return new Promise(resolve => {
-    const client = net.createConnection({ host: ip, port: DISCOVERY_PORT, timeout: 500 }, () => {
-      client.write(MAGIC + '\n');
-    });
+    const client = net.createConnection({ host: ip, port: DISCOVERY_PORT, timeout: 700 }, () => client.write(MAGIC + '\n'));
     let data = '';
     client.setEncoding('utf8');
     client.on('data', chunk => {
@@ -169,29 +173,26 @@ function probeDevice(ip) {
 }
 
 async function scanNetwork() {
-  const addresses = getLocalIPv4();
-  if (!addresses.length) { console.log('\nNo local IPv4 network interface found.'); return; }
-  const usable = addresses.find(x => !x.name.toLowerCase().includes('loopback')) || addresses[0];
-  const targets = getSubnetAddresses(usable.address, usable.netmask);
-  if (!targets.length) {
-    console.log(`\nCannot scan subnet ${usable.address}/${usable.netmask}; subnet is too large.`);
-    return;
+  const interfaces = selectScanInterfaces();
+  if (!interfaces.length) { console.log('\nNo usable local IPv4 interface found.'); return; }
+  for (const network of interfaces) {
+    const targets = getSubnetAddresses(network.address, network.netmask);
+    if (!targets.length) continue;
+    console.log(`\n[DISCOVERY SCAN] ${network.name}: ${network.address} / ${network.netmask}`);
+    console.log(`[DISCOVERY SCAN] Scanning ${targets.length} addresses on port ${DISCOVERY_PORT}...`);
+    for (let i = 0; i < targets.length; i += 20) {
+      await Promise.all(targets.slice(i, i + 20).map(probeDevice));
+    }
   }
-  console.log(`\n[DISCOVERY SCAN] ${usable.name}: ${usable.address} / ${usable.netmask}`);
-  console.log(`[DISCOVERY SCAN] Scanning ${targets.length} addresses on port ${DISCOVERY_PORT}...`);
   let found = 0;
-  for (let i = 0; i < targets.length; i += 20) {
-    const batch = targets.slice(i, i + 20);
-    await Promise.all(batch.map(ip => probeDevice(ip)));
-  }
   for (const device of discoveredDevices.values()) if (now() - device.lastSeen < 12000) found++;
   console.log(`[DISCOVERY SCAN] Finished. Found ${found} iTantra device(s).`);
 }
 
 function startDiscoveryScan() {
   if (scanTimer) { console.log('Discovery scanner is already running.'); return; }
-  scanNetwork();
-  scanTimer = setInterval(scanNetwork, 5000);
+  void scanNetwork();
+  scanTimer = setInterval(() => void scanNetwork(), 5000);
   console.log('Discovery scanner started.');
 }
 
@@ -244,7 +245,7 @@ function help() {
 Commands
 --------
 start                 Start laptop TCP server on port 5555
-discovery             Start laptop discovery server + scanner
+discovery             Start BOTH laptop TCP server + discovery server + scanner
 scan                  Scan the local subnet once for iTantra devices
 stop-scan             Stop repeated discovery scanning
 stop-discovery        Stop laptop discovery server
@@ -259,16 +260,22 @@ status                Show servers, connection and discovered devices
 help                  Show this help
 quit                  Exit
 
-Recommended two-way test
--------------------------
+Recommended test
+----------------
 1. Phone hotspot ON; laptop connects to phone hotspot.
 2. discovery
-3. Watch for the phone to appear in the scan results.
-4. c <phone-ip> if you want a direct TCP connection.
-5. r to call the phone.
-6. On the phone, Accept.
+3. Wait until the phone appears in the scan results.
+4. c <phone-ip>       (use the IP shown by discovery)
+5. r                  (phone should receive call request)
+6. Accept on phone.
 7. s Hello from laptop
 8. end
+
+Phone -> laptop
+---------------
+The phone should discover "Laptop Test Node" and show its actual laptop IP.
+Tap Call. The laptop terminal should show INCOMING CALL REQUEST.
+Type accept or reject.
 `);
 }
 
@@ -279,8 +286,8 @@ function handleCommand(line) {
   const argument = rest.join(' ').trim();
   switch (command.toLowerCase()) {
     case 'start': startServer(); break;
-    case 'discovery': startDiscoveryServer(); startDiscoveryScan(); break;
-    case 'scan': scanNetwork(); break;
+    case 'discovery': startServer(); startDiscoveryServer(); startDiscoveryScan(); break;
+    case 'scan': void scanNetwork(); break;
     case 'stop-scan': stopDiscoveryScan(); break;
     case 'stop-discovery': stopDiscoveryServer(); break;
     case 'c': case 'connect': connectToPhone(argument); break;
