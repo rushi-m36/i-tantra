@@ -18,7 +18,7 @@ function DeviceCard({ device, onCall, isLoading }: { device: Device; onCall: () 
 }
 
 export default function AvailableDevicesScreen() {
-  const { devices, callDevice, selfCall, callState, currentDevice } = useCommunication();
+  const { devices, scanStatus, callDevice, selfCall, callState, currentDevice } = useCommunication();
   const [loading, setLoading] = useState(false);
   const [showAddDevice, setShowAddDevice] = useState(false);
   const [deviceIp, setDeviceIp] = useState("");
@@ -55,12 +55,29 @@ export default function AvailableDevicesScreen() {
         <TouchableOpacity onPress={() => setShowAddDevice(true)} className="rounded-lg bg-green-500 px-3 py-2"><Text className="font-semibold text-white">+ Add</Text></TouchableOpacity>
       </View>
 
+      <View className="mb-4 rounded-lg border border-gray-200 bg-gray-50 p-4">
+        {scanStatus.scanning ? (
+          <>
+            <View className="flex-row items-center">
+              <ActivityIndicator size="small" />
+              <Text className="ml-2 font-semibold text-gray-800">Scanning local network...</Text>
+            </View>
+            {scanStatus.currentIp && <Text className="mt-2 font-mono text-sm text-gray-600">Scanning IP: {scanStatus.currentIp}</Text>}
+            {scanStatus.total > 0 && <Text className="mt-1 text-xs text-gray-500">Checked {scanStatus.scanned} / {scanStatus.total} addresses • Found {scanStatus.found}</Text>}
+          </>
+        ) : devices.length > 0 ? (
+          <Text className="font-semibold text-green-700">Found {devices.length} iTantra device{devices.length === 1 ? "" : "s"} on the network.</Text>
+        ) : (
+          <Text className="font-semibold text-gray-600">No iTantra devices found on this network.</Text>
+        )}
+      </View>
+
       <TouchableOpacity onPress={handleSelfCall} disabled={loading} className="mb-5 rounded-lg border border-purple-300 bg-purple-50 px-4 py-3">
         <Text className="text-center font-semibold text-purple-700">{loading ? "Starting self test..." : "Self Call (Test on One Phone)"}</Text>
         <Text className="mt-1 text-center text-xs text-purple-500">Uses the real TCP loopback connection on port 5555</Text>
       </TouchableOpacity>
 
-      {devices.length === 0 ? <View className="mt-2"><Text className="text-gray-600">No devices found. Use + Add to manually enter a device IP.</Text></View> :
+      {devices.length === 0 ? null :
         <FlatList data={devices} keyExtractor={(item) => item.id} renderItem={({ item }) => <DeviceCard device={item} onCall={() => void handleCall(item)} isLoading={loading && currentDevice?.id === item.id} />} className="mt-2" />}
 
       <Modal visible={showAddDevice} transparent animationType="slide">
