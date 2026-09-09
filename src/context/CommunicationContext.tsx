@@ -1,4 +1,5 @@
 import React, { createContext, useCallback, useEffect, useState } from "react";
+import * as Linking from "expo-linking";
 import {
   DeviceDiscovery,
   getDeviceDiscovery,
@@ -35,7 +36,6 @@ interface CommunicationContextType {
   localDeviceName: string;
   isConnected: boolean;
   incomingCallFrom: Device | null;
-
   startServer: () => Promise<void>;
   callDevice: (device: Device) => Promise<void>;
   selfCall: () => Promise<void>;
@@ -52,11 +52,7 @@ export const CommunicationContext = createContext<CommunicationContextType | und
   undefined,
 );
 
-export function CommunicationProvider({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+export function CommunicationProvider({ children }: { children: React.ReactNode }) {
   const [devices, setDevices] = useState<Device[]>([]);
   const [callState, setCallState] = useState<CallState>("idle");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -86,13 +82,11 @@ export function CommunicationProvider({
           setCallState("incoming");
           break;
         }
-
         case "call_accept":
           setCallState("connected");
           setIncomingCallFrom(null);
           setMessages([]);
           break;
-
         case "call_reject":
           setCallState("rejected");
           setIncomingCallFrom(null);
@@ -101,13 +95,10 @@ export function CommunicationProvider({
             setCurrentDevice(null);
           }, 1500);
           break;
-
         case "speech_message": {
           const speechMsg = msg as SpeechMessage;
           const senderName =
-            speechMsg.senderId === disc.getDeviceId()
-              ? "You (loopback)"
-              : "Remote device";
+            speechMsg.senderId === disc.getDeviceId() ? "You (loopback)" : "Remote device";
           const chatMsg: ChatMessage = {
             id: speechMsg.id,
             senderId: speechMsg.senderId,
@@ -115,25 +106,18 @@ export function CommunicationProvider({
             text: speechMsg.text,
             timestamp: speechMsg.timestamp,
           };
-
-          // TCP loopback sends our own message back to this same process.
-          // Do not add it twice if sendMessage() already added it locally.
           setMessages((prev) =>
-            prev.some((item) => item.id === chatMsg.id)
-              ? prev
-              : [...prev, chatMsg],
+            prev.some((item) => item.id === chatMsg.id) ? prev : [...prev, chatMsg],
           );
           void getTextToSpeechService().speak(speechMsg.text);
           break;
         }
-
         case "call_end":
           setCallState("idle");
           setCurrentDevice(null);
           setIncomingCallFrom(null);
           setMessages([]);
           break;
-
         case "heartbeat":
           break;
       }
@@ -150,7 +134,6 @@ export function CommunicationProvider({
       try {
         const disc = await getDeviceDiscovery();
         if (!active) return;
-
         localDiscovery = disc;
         setDiscovery(disc);
         setDeviceId(disc.getDeviceId());
@@ -163,11 +146,9 @@ export function CommunicationProvider({
         disc.onDevicesChanged((newDevices) => {
           if (active) setDevices(newDevices);
         });
-
         tcpService.onMessage((msg) => {
           if (active) handleIncomingMessage(msg, disc);
         });
-
         tcpService.onConnectionChange((connected) => {
           if (active) setIsConnected(connected);
         });
@@ -180,7 +161,6 @@ export function CommunicationProvider({
     };
 
     void init();
-
     return () => {
       active = false;
       void localTcp?.cleanup();
@@ -188,41 +168,76 @@ export function CommunicationProvider({
     };
   }, [handleIncomingMessage]);
 
+  // Accepting a call from the background notification opens the app with a
+  // deep link. Connect back to the caller and enter the communication page.
+  useEffect(() => {
+    if (!tcp) return;
+
+    const handleUrl = async (url: string | null) => {
+      if (!url || !url.startsWith("itantra://incoming-call")) return;
+      const parsed = Linking.parse(url);
+      const ip = typeof parsed.queryParams?.ip === "string" ? parsed.queryParams.ip : "";
+      const name = typeof parsed.queryParams?.name === "string" ? parsed.queryParams.name : "iTantra device";
+      if (!ip) return;
+
+      const remote: Device = {
+        id: `remote-${ip}`,
+        name,
+        ip,
+        port: TCP_PORT,
+        status: "connected",
+        lastSeen: Date.now(),
+      };
+
+      try {
+        setCurrentDevice(remote);
+        setIncomingCallFrom(null);
+        await tcp.connectToDevice(ip, TCP_PORT);
+        setMessages([]);
+        setCallState("connected");
+      } catch (error) {
+        console.error("Failed to reconnect after accepting background call:", error);
+        setCallState("idle");
+        setCurrentDevice(null);
+      }
+    };
+
+    void Linking.getInitialURL().then(handleUrl);
+    const subscription = Linking.addEventListener("url", ({ url }) => {
+      void handleUrl(url);
+    });
+    return () => subscription.remove();
+  }, [tcp]);
+
   const startServer = useCallback(async () => {
     if (!tcp) return;
     await tcp.startServer();
   }, [tcp]);
 
-  const callDevice = useCallback(
-    async (device: Device) => {
-      if (!tcp || !device.ip) return;
-
-      setCurrentDevice(device);
-      setCallState("calling");
-      setIncomingCallFrom(null);
-
-      try {
-        await tcp.connectToDevice(device.ip, device.port || TCP_PORT);
-        const msg: CallRequestMessage = {
-          type: "call_request",
-          senderId: deviceId,
-          senderName: deviceName,
-          timestamp: Date.now(),
-        };
-        await tcp.sendMessage(msg);
-      } catch (error) {
-        console.error("Failed to call device:", error);
-        await tcp.disconnect();
-        setCallState("idle");
-        setCurrentDevice(null);
-      }
-    },
-    [tcp, deviceId, deviceName],
-  );
+  const callDevice = useCallback(async (device: Device) => {
+    if (!tcp || !device.ip) return;
+    setCurrentDevice(device);
+    setCallState("calling");
+    setIncomingCallFrom(null);
+    try {
+      await tcp.connectToDevice(device.ip, device.port || TCP_PORT);
+      const msg: CallRequestMessage = {
+        type: "call_request",
+        senderId: deviceId,
+        senderName: deviceName,
+        timestamp: Date.now(),
+      };
+      await tcp.sendMessage(msg);
+    } catch (error) {
+      console.error("Failed to call device:", error);
+      await tcp.disconnect();
+      setCallState("idle");
+      setCurrentDevice(null);
+    }
+  }, [tcp, deviceId, deviceName]);
 
   const selfCall = useCallback(async () => {
     if (!tcp || !deviceId) return;
-
     const selfDevice: Device = {
       id: deviceId,
       name: `${deviceName || "This device"} (Self Test)`,
@@ -231,32 +246,26 @@ export function CommunicationProvider({
       status: "connected",
       lastSeen: Date.now(),
     };
-
     setCurrentDevice(selfDevice);
     setMessages([]);
     setCallState("calling");
     setIncomingCallFrom(null);
-
     try {
       await tcp.startServer();
       await tcp.connectToDevice("127.0.0.1", TCP_PORT);
-
       await tcp.sendMessage({
         type: "call_request",
         senderId: deviceId,
         senderName: deviceName || "This device",
         timestamp: Date.now(),
       });
-
       setTimeout(async () => {
-        const accept: CallAcceptMessage = {
-          type: "call_accept",
-          senderId: deviceId,
-          timestamp: Date.now(),
-        };
-
         try {
-          await tcp.sendMessage(accept);
+          await tcp.sendMessage({
+            type: "call_accept",
+            senderId: deviceId,
+            timestamp: Date.now(),
+          });
           setCallState("connected");
           setIncomingCallFrom(null);
           setCurrentDevice(selfDevice);
@@ -277,14 +286,12 @@ export function CommunicationProvider({
 
   const acceptCall = useCallback(async () => {
     if (!tcp || !incomingCallFrom) return;
-
     try {
-      const msg: CallAcceptMessage = {
+      await tcp.sendMessage({
         type: "call_accept",
         senderId: deviceId,
         timestamp: Date.now(),
-      };
-      await tcp.sendMessage(msg);
+      });
       setCallState("connected");
       setCurrentDevice(incomingCallFrom);
       setIncomingCallFrom(null);
@@ -296,18 +303,15 @@ export function CommunicationProvider({
 
   const rejectCall = useCallback(async () => {
     if (!tcp || !incomingCallFrom) return;
-
     try {
-      const msg: CallRejectMessage = {
+      await tcp.sendMessage({
         type: "call_reject",
         senderId: deviceId,
         timestamp: Date.now(),
-      };
-      await tcp.sendMessage(msg);
+      });
     } catch (error) {
       console.error("Failed to reject call:", error);
     }
-
     await tcp.disconnect();
     setCallState("idle");
     setIncomingCallFrom(null);
@@ -316,20 +320,17 @@ export function CommunicationProvider({
 
   const endCall = useCallback(async () => {
     if (!tcp) return;
-
     try {
       if (tcp.isConnected()) {
-        const msg: Message = {
+        await tcp.sendMessage({
           type: "call_end",
           senderId: deviceId,
           timestamp: Date.now(),
-        };
-        await tcp.sendMessage(msg);
+        });
       }
     } catch (error) {
       console.error("Failed to send call_end:", error);
     }
-
     await tcp.disconnect();
     setCallState("idle");
     setCurrentDevice(null);
@@ -337,37 +338,29 @@ export function CommunicationProvider({
     setMessages([]);
   }, [tcp, deviceId]);
 
-  const sendMessage = useCallback(
-    async (text: string) => {
-      const trimmed = text.trim();
-      if (!tcp || !trimmed || !tcp.isConnected()) return;
-
-      const msg: SpeechMessage = {
-        type: "speech_message",
-        id: generateUUID(),
-        senderId: deviceId,
-        text: trimmed,
-        timestamp: Date.now(),
-      };
-
-      await tcp.sendMessage(msg);
-      setMessages((prev) =>
-        prev.some((item) => item.id === msg.id)
-          ? prev
-          : [
-              ...prev,
-              {
-                id: msg.id,
-                senderId: deviceId,
-                senderName: deviceName || "You",
-                text: trimmed,
-                timestamp: msg.timestamp,
-              },
-            ],
-      );
-    },
-    [tcp, deviceId, deviceName],
-  );
+  const sendMessage = useCallback(async (text: string) => {
+    const trimmed = text.trim();
+    if (!tcp || !trimmed || !tcp.isConnected()) return;
+    const msg: SpeechMessage = {
+      type: "speech_message",
+      id: generateUUID(),
+      senderId: deviceId,
+      text: trimmed,
+      timestamp: Date.now(),
+    };
+    await tcp.sendMessage(msg);
+    setMessages((prev) =>
+      prev.some((item) => item.id === msg.id)
+        ? prev
+        : [...prev, {
+            id: msg.id,
+            senderId: deviceId,
+            senderName: deviceName || "You",
+            text: trimmed,
+            timestamp: msg.timestamp,
+          }],
+    );
+  }, [tcp, deviceId, deviceName]);
 
   const startSpeechRecognition = useCallback(async () => {
     const stt = getSpeechToTextService();
@@ -387,28 +380,13 @@ export function CommunicationProvider({
   }, [tcp, discovery]);
 
   return (
-    <CommunicationContext.Provider
-      value={{
-        devices,
-        callState,
-        messages,
-        currentDevice,
-        localDeviceId: deviceId,
-        localDeviceName: deviceName,
-        isConnected,
-        incomingCallFrom,
-        startServer,
-        callDevice,
-        selfCall,
-        acceptCall,
-        rejectCall,
-        endCall,
-        sendMessage,
-        startSpeechRecognition,
-        stopSpeechRecognition,
-        cleanup,
-      }}
-    >
+    <CommunicationContext.Provider value={{
+      devices, callState, messages, currentDevice,
+      localDeviceId: deviceId, localDeviceName: deviceName,
+      isConnected, incomingCallFrom,
+      startServer, callDevice, selfCall, acceptCall, rejectCall,
+      endCall, sendMessage, startSpeechRecognition, stopSpeechRecognition, cleanup,
+    }}>
       {children}
     </CommunicationContext.Provider>
   );
@@ -416,8 +394,6 @@ export function CommunicationProvider({
 
 export function useCommunication() {
   const context = React.useContext(CommunicationContext);
-  if (!context) {
-    throw new Error("useCommunication must be used within CommunicationProvider");
-  }
+  if (!context) throw new Error("useCommunication must be used within CommunicationProvider");
   return context;
 }
