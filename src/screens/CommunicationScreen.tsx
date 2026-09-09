@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { Animated, Modal, Pressable, Text, TextInput, TouchableOpacity, View } from "react-native";
+import { useEffect, useRef, useState } from "react";
+import { Animated, Modal, Pressable, ScrollView, Text, TextInput, TouchableOpacity, View } from "react-native";
 import "../../global.css";
 import { useCommunication } from "../context/CommunicationContext";
 import { ChatMessage as ChatMessageType } from "../types/communication";
@@ -18,6 +18,15 @@ export default function CommunicationScreen() {
   const [pressScale] = useState(new Animated.Value(1));
   const [messageText, setMessageText] = useState("");
   const [showTextInput, setShowTextInput] = useState(false);
+  const scrollViewRef = useRef<ScrollView>(null);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      scrollViewRef.current?.scrollToEnd({ animated: true });
+    }, 50);
+
+    return () => clearTimeout(timer);
+  }, [messages.length]);
 
   const handleMicPress = async () => {
     setIsListening(true);
@@ -79,55 +88,64 @@ export default function CommunicationScreen() {
       </View>
 
       <View style={{ flex: 1, padding: 12 }}>
-        {messages.map((item: ChatMessageType, index) => {
-          const safeItem: ChatMessageType = {
-            id: typeof item?.id === "string" ? item.id : `message-${index}`,
-            senderId: typeof item?.senderId === "string" ? item.senderId : "unknown",
-            senderName: typeof item?.senderName === "string" ? item.senderName : "Unknown",
-            text: typeof item?.text === "string" ? item.text : String(item?.text ?? ""),
-            timestamp: typeof item?.timestamp === "number" ? item.timestamp : Date.now(),
-          };
-          const own = safeItem.senderId === localDeviceId;
+        <ScrollView
+          ref={scrollViewRef}
+          style={{ flex: 1 }}
+          contentContainerStyle={{ paddingBottom: 12, flexGrow: 1, justifyContent: "flex-end" }}
+          showsVerticalScrollIndicator
+          keyboardShouldPersistTaps="handled"
+          onContentSizeChange={() => scrollViewRef.current?.scrollToEnd({ animated: true })}
+        >
+          {messages.map((item: ChatMessageType, index) => {
+            const safeItem: ChatMessageType = {
+              id: typeof item?.id === "string" ? item.id : `message-${index}`,
+              senderId: typeof item?.senderId === "string" ? item.senderId : "unknown",
+              senderName: typeof item?.senderName === "string" ? item.senderName : "Unknown",
+              text: typeof item?.text === "string" ? item.text : String(item?.text ?? ""),
+              timestamp: typeof item?.timestamp === "number" ? item.timestamp : Date.now(),
+            };
+            const own = safeItem.senderId === localDeviceId;
 
-          return (
-            <View
-              key={safeItem.id}
-              style={{
-                marginBottom: 12,
-                flexDirection: "row",
-                justifyContent: own ? "flex-end" : "flex-start",
-              }}
-            >
+            return (
               <View
+                key={safeItem.id}
                 style={{
-                  maxWidth: "80%",
-                  borderRadius: 10,
-                  paddingHorizontal: 12,
-                  paddingVertical: 9,
-                  backgroundColor: own ? "#3b82f6" : "#e5e7eb",
+                  marginBottom: 12,
+                  flexDirection: "row",
+                  justifyContent: own ? "flex-end" : "flex-start",
                 }}
               >
-                {!own && (
-                  <Text style={{ fontSize: 12, fontWeight: "600", color: "#4b5563", marginBottom: 2 }}>
-                    {safeItem.senderName}
-                  </Text>
-                )}
-                <Text style={{ color: own ? "#fff" : "#111827", fontSize: 15 }}>
-                  {safeItem.text}
-                </Text>
-                <Text
+                <View
                   style={{
-                    marginTop: 4,
-                    fontSize: 11,
-                    color: own ? "#dbeafe" : "#6b7280",
+                    maxWidth: "80%",
+                    borderRadius: 10,
+                    paddingHorizontal: 12,
+                    paddingVertical: 9,
+                    backgroundColor: own ? "#3b82f6" : "#e5e7eb",
                   }}
                 >
-                  {new Date(safeItem.timestamp).toLocaleTimeString()}
-                </Text>
+                  {!own && (
+                    <Text style={{ fontSize: 12, fontWeight: "600", color: "#4b5563", marginBottom: 2 }}>
+                      {safeItem.senderName}
+                    </Text>
+                  )}
+                  <Text style={{ color: own ? "#fff" : "#111827", fontSize: 15 }}>
+                    {safeItem.text}
+                  </Text>
+                  <Text
+                    style={{
+                      marginTop: 4,
+                      fontSize: 11,
+                      color: own ? "#dbeafe" : "#6b7280",
+                    }}
+                  >
+                    {new Date(safeItem.timestamp).toLocaleTimeString()}
+                  </Text>
+                </View>
               </View>
-            </View>
-          );
-        })}
+            );
+          })}
+        </ScrollView>
       </View>
 
       <View

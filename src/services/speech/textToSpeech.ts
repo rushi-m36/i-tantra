@@ -5,42 +5,64 @@ export class TextToSpeechService {
   private onStartCallbacks: Array<() => void> = [];
   private onFinishCallbacks: Array<() => void> = [];
   private onErrorCallbacks: Array<(error: string) => void> = [];
+  private initializationPromise: Promise<void>;
 
   constructor() {
-    this.initialize();
+    this.initializationPromise = this.initialize();
   }
 
   private async initialize(): Promise<void> {
     try {
-      // Check if speech is available
       const voices = await Speech.getAvailableVoicesAsync();
-      console.log("Available voices:", voices.length);
+      console.log("TTS initialized. Available voices:", voices.length);
+
+      const englishVoices = voices.filter((voice) =>
+        voice.language?.toLowerCase().startsWith("en"),
+      );
+      console.log("English TTS voices:", englishVoices.length);
     } catch (e) {
       console.error("TTS initialization error:", e);
     }
   }
 
   /**
-   * Speak text
+   * Speak text using the Android/iOS native TTS engine.
    */
   async speak(text: string): Promise<void> {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+
     try {
-      if (!text) return;
+      // Wait until the native TTS service has finished initializing.
+      await this.initializationPromise;
 
       if (this.isSpeaking) {
         await Speech.stop();
+        this.isSpeaking = false;
       }
+
+      console.log("TTS speaking:", trimmed);
 
       this.isSpeaking = true;
       this.onStartCallbacks.forEach((cb) => cb());
 
-      await Speech.speak(text, {
-        language: "en",
+      Speech.speak(trimmed, {
+        // Use a complete locale. Android TTS engines are more reliable
+        // with en-US than the generic "en" locale.
+        language: "en-US",
         pitch: 1.0,
         rate: 0.9,
+        onStart: () => {
+          console.log("TTS playback started");
+        },
         onDone: () => {
+          console.log("TTS playback finished");
           this.isSpeaking = false;
           this.onFinishCallbacks.forEach((cb) => cb());
+        },
+        onStopped: () => {
+          console.log("TTS playback stopped");
+          this.isSpeaking = false;
         },
         onError: (error: any) => {
           this.isSpeaking = false;
