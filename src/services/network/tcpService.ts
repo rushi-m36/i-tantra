@@ -42,13 +42,20 @@ export class TCPService {
       return SERVER_PORT;
     }
 
-    if (this.startPromise) {
-      return this.startPromise;
+    const existingStartPromise = this.startPromise;
+    if (existingStartPromise) {
+      return existingStartPromise;
     }
 
-    this.startPromise = new Promise((resolve, reject) => {
+    const startPromise: Promise<number> = new Promise<number>((resolve, reject) => {
       let settled = false;
       let server: any = null;
+
+      const cleanupStartPromise = () => {
+        if (this.startPromise === startPromise) {
+          this.startPromise = null;
+        }
+      };
 
       try {
         server = TcpSocket.createServer((socket: any) => {
@@ -91,6 +98,7 @@ export class TCPService {
           if (!settled) {
             settled = true;
             this.server = null;
+            cleanupStartPromise();
 
             if (err?.code === "EADDRINUSE") {
               reject(
@@ -119,6 +127,7 @@ export class TCPService {
           () => {
             if (!settled) {
               settled = true;
+              cleanupStartPromise();
               console.log("TCP server listening on port", SERVER_PORT);
               resolve(SERVER_PORT);
             }
@@ -128,14 +137,14 @@ export class TCPService {
         if (!settled) {
           settled = true;
           this.server = null;
+          cleanupStartPromise();
           reject(error);
         }
       }
-    }).finally(() => {
-      this.startPromise = null;
     });
 
-    return this.startPromise;
+    this.startPromise = startPromise;
+    return startPromise;
   }
 
   /** Connect to a remote TCP server. */
