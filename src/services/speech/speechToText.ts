@@ -10,8 +10,6 @@ export interface STTModalState {
 
 /**
  * Native Android/iOS speech recognition backed by the platform SpeechRecognizer APIs.
- * Android is configured for on-device recognition so speech recognition does not
- * depend on an internet connection when the device has an offline language pack.
  */
 export class SpeechToTextService {
   private isListening = false;
@@ -95,7 +93,9 @@ export class SpeechToTextService {
           interimResults: true,
           maxAlternatives: 1,
           continuous: false,
-          requiresOnDeviceRecognition: true,
+          // Let Android choose its available native recognition mode. This was
+          // the configuration that worked on the user's device offline.
+          requiresOnDeviceRecognition: false,
           addsPunctuation: false,
         });
       } catch (error) {
@@ -138,7 +138,8 @@ export class SpeechToTextService {
         interimResults: true,
         maxAlternatives: 1,
         continuous: false,
-        requiresOnDeviceRecognition: true,
+        // Let Android choose its available native recognition mode.
+        requiresOnDeviceRecognition: false,
         addsPunctuation: false,
       });
     } catch (error) {
