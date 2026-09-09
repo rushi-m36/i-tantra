@@ -6,10 +6,13 @@ const readline = require('node:readline');
 const crypto = require('node:crypto');
 
 const PORT = 5555;
+const DISCOVERY_PORT = 5556;
 const DEFAULT_NAME = 'Laptop Test Node';
+const DEVICE_ID = 'laptop-test-node';
 
 let socket = null;
 let server = null;
+let discoveryServer = null;
 let buffer = '';
 let connectedPeer = null;
 
@@ -97,6 +100,73 @@ function startServer() {
   });
 }
 
+function startDiscoveryServer() {
+  if (discoveryServer) {
+    console.log(`Discovery server is already listening on ${DISCOVERY_PORT}.`);
+    return;
+  }
+
+  discoveryServer = net.createServer((client) => {
+    let requestBuffer = '';
+    const remote = `${client.remoteAddress}:${client.remotePort}`;
+    console.log(`\n[DISCOVERY] Request from ${remote}`);
+
+    client.setEncoding('utf8');
+    client.on('data', (data) => {
+      requestBuffer += data;
+      if (!requestBuffer.includes('\n')) return;
+
+      const request = requestBuffer.split('\n')[0].trim();
+      if (request !== 'ITANTRA_DISCOVER_V1') {
+        console.log(`[DISCOVERY] Ignored unknown request: ${request}`);
+        client.destroy();
+        return;
+      }
+
+      const response = {
+        magic: 'ITANTRA_DISCOVER_V1',
+        id: DEVICE_ID,
+        name: DEFAULT_NAME,
+        port: PORT,
+      };
+
+      client.write(JSON.stringify(response) + '\n', 'utf8', () => {
+        console.log(`[DISCOVERY] Sent device info to ${remote}`);
+        client.destroy();
+      });
+    });
+
+    client.on('error', (error) => {
+      console.log(`[DISCOVERY] Client error: ${error.message}`);
+    });
+  });
+
+  discoveryServer.on('error', (error) => {
+    console.error(`\nDiscovery server error: ${error.message}`);
+    if (error.code === 'EADDRINUSE') {
+      console.error(`Discovery port ${DISCOVERY_PORT} is already in use.`);
+    }
+  });
+
+  discoveryServer.listen(DISCOVERY_PORT, '0.0.0.0', () => {
+    console.log(`\nDiscovery server listening on 0.0.0.0:${DISCOVERY_PORT}`);
+    console.log('Phones can now discover this laptop as an iTantra device.');
+    prompt();
+  });
+}
+
+function stopDiscoveryServer() {
+  if (!discoveryServer) {
+    console.log('Discovery server is not running.');
+    return;
+  }
+
+  discoveryServer.close(() => {
+    console.log('Discovery server stopped.');
+  });
+  discoveryServer = null;
+}
+
 function connectToPhone(host) {
   if (!host) {
     console.log('Usage: c <phone-ip>');
@@ -125,7 +195,7 @@ function connectToPhone(host) {
 function callRequest() {
   send({
     type: 'call_request',
-    senderId: 'laptop-test-node',
+    senderId: DEVICE_ID,
     senderName: DEFAULT_NAME,
     timestamp: now(),
   });
@@ -134,7 +204,7 @@ function callRequest() {
 function callAccept() {
   send({
     type: 'call_accept',
-    senderId: 'laptop-test-node',
+    senderId: DEVICE_ID,
     timestamp: now(),
   });
 }
@@ -142,7 +212,7 @@ function callAccept() {
 function callReject() {
   send({
     type: 'call_reject',
-    senderId: 'laptop-test-node',
+    senderId: DEVICE_ID,
     timestamp: now(),
   });
 }
@@ -156,7 +226,7 @@ function speech(text) {
   send({
     type: 'speech_message',
     id: crypto.randomUUID(),
-    senderId: 'laptop-test-node',
+    senderId: DEVICE_ID,
     text,
     timestamp: now(),
   });
@@ -165,7 +235,7 @@ function speech(text) {
 function callEnd() {
   send({
     type: 'call_end',
-    senderId: 'laptop-test-node',
+    senderId: DEVICE_ID,
     timestamp: now(),
   });
 }
@@ -173,13 +243,14 @@ function callEnd() {
 function heartbeat() {
   send({
     type: 'heartbeat',
-    senderId: 'laptop-test-node',
+    senderId: DEVICE_ID,
     timestamp: now(),
   });
 }
 
 function status() {
-  console.log(`\nServer: ${server ? 'running on :5555' : 'stopped'}`);
+  console.log(`\nTCP server: ${server ? 'running on :5555' : 'stopped'}`);
+  console.log(`Discovery server: ${discoveryServer ? 'running on :5556' : 'stopped'}`);
   console.log(`Connection: ${socket && !socket.destroyed ? 'connected' : 'not connected'}`);
   if (connectedPeer) console.log(`Peer: ${connectedPeer}`);
 }
@@ -189,6 +260,8 @@ function help() {
 Commands
 --------
 start                 Start laptop TCP server on port 5555
+discovery             Start laptop iTantra discovery server on port 5556
+stop-discovery        Stop discovery server
 c <phone-ip>          Connect to a phone running iTantra TCP server
 r                     Send call_request
 accept                Send call_accept
@@ -200,8 +273,14 @@ status                Show server/connection status
 help                  Show this help
 quit                  Exit
 
-Examples
---------
+Discovery test
+--------------
+discovery
+Then open iTantra on the phone connected to the same Wi-Fi/hotspot.
+The phone should find "Laptop Test Node" automatically.
+
+Communication test
+------------------
 start
 c 192.168.43.123
 r
@@ -222,6 +301,12 @@ function handleCommand(line) {
   switch (command.toLowerCase()) {
     case 'start':
       startServer();
+      break;
+    case 'discovery':
+      startDiscoveryServer();
+      break;
+    case 'stop-discovery':
+      stopDiscoveryServer();
       break;
     case 'c':
     case 'connect':
@@ -271,6 +356,7 @@ function prompt() {
 function shutdown() {
   if (socket && !socket.destroyed) socket.destroy();
   if (server) server.close();
+  if (discoveryServer) discoveryServer.close();
   rl.close();
 }
 
@@ -288,11 +374,13 @@ rl.on('line', (line) => {
 rl.on('close', () => {
   if (socket && !socket.destroyed) socket.destroy();
   if (server) server.close();
+  if (discoveryServer) discoveryServer.close();
   process.exit(0);
 });
 
 console.log('iTantra Laptop Test Node');
 console.log('Protocol: JSON messages separated by newline');
-console.log('TCP port: 5555');
+console.log('TCP communication port: 5555');
+console.log('TCP discovery port: 5556');
 console.log('Type "help" for commands.');
 prompt();
