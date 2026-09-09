@@ -15,7 +15,7 @@ const MAGIC = 'ITANTRA_DISCOVER_V1';
 let socket = null;
 let server = null;
 let discoveryServer = null;
-let scanTimer = null;
+let scanInProgress = false;
 let buffer = '';
 let connectedPeer = null;
 let discoveredDevices = new Map();
@@ -173,51 +173,79 @@ function probeDevice(ip) {
 }
 
 async function scanNetwork() {
-  const interfaces = selectScanInterfaces();
-  if (!interfaces.length) { console.log('\nNo usable local IPv4 interface found.'); return; }
-  for (const network of interfaces) {
-    const targets = getSubnetAddresses(network.address, network.netmask);
-    if (!targets.length) continue;
-    console.log(`\n[DISCOVERY SCAN] ${network.name}: ${network.address} / ${network.netmask}`);
-    console.log(`[DISCOVERY SCAN] Scanning ${targets.length} addresses on port ${DISCOVERY_PORT}...`);
-    for (let i = 0; i < targets.length; i += 20) {
-      await Promise.all(targets.slice(i, i + 20).map(probeDevice));
-    }
+  if (scanInProgress) {
+    console.log('Discovery scan is already running.');
+    return;
   }
-  let found = 0;
-  for (const device of discoveredDevices.values()) if (now() - device.lastSeen < 12000) found++;
-  console.log(`[DISCOVERY SCAN] Finished. Found ${found} iTantra device(s).`);
+
+  scanInProgress = true;
+  try {
+    const interfaces = selectScanInterfaces();
+    if (!interfaces.length) {
+      console.log('\nNo usable local IPv4 interface found.');
+      return;
+    }
+
+    // Remove stale results before the new scan.
+    for (const [id, device] of discoveredDevices) {
+      if (now() - device.lastSeen >= 12000) discoveredDevices.delete(id);
+    }
+
+    for (const network of interfaces) {
+      const targets = getSubnetAddresses(network.address, network.netmask);
+      if (!targets.length) continue;
+      console.log(`\n[DISCOVERY SCAN] ${network.name}: ${network.address} / ${network.netmask}`);
+      console.log(`[DISCOVERY SCAN] Scanning ${targets.length} addresses on port ${DISCOVERY_PORT}...`);
+      for (let i = 0; i < targets.length; i += 20) {
+        await Promise.all(targets.slice(i, i + 20).map(probeDevice));
+      }
+    }
+
+    console.log(`\n[DISCOVERY SCAN] Finished. Found ${discoveredDevices.size} iTantra device(s).`);
+    listDevices();
+  } finally {
+    scanInProgress = false;
+    prompt();
+  }
 }
 
-function startDiscoveryScan() {
-  if (scanTimer) { console.log('Discovery scanner is already running.'); return; }
-  void scanNetwork();
-  scanTimer = setInterval(() => void scanNetwork(), 5000);
-  console.log('Discovery scanner started.');
+function listDevices() {
+  if (!discoveredDevices.size) {
+    console.log('No discovered iTantra devices. Run: scan');
+    return;
+  }
+  console.log('\nDiscovered devices:');
+  let index = 1;
+  for (const device of discoveredDevices.values()) {
+    console.log(`  ${index}. ${device.name || device.id} - ${device.ip}:${device.port || PORT}`);
+    index++;
+  }
 }
 
-function stopDiscoveryScan() {
-  if (scanTimer) clearInterval(scanTimer);
-  scanTimer = null;
-  console.log('Discovery scanner stopped.');
-}
-
-function stopDiscoveryServer() {
-  if (!discoveryServer) { console.log('Discovery server is not running.'); return; }
-  discoveryServer.close(() => console.log('Discovery server stopped.'));
-  discoveryServer = null;
+function getDeviceBySelector(selector) {
+  if (!selector) return null;
+  if (/^\d+$/.test(selector)) {
+    const index = Number(selector);
+    return Array.from(discoveredDevices.values())[index - 1] || null;
+  }
+  for (const device of discoveredDevices.values()) {
+    if (device.ip === selector || device.id === selector || device.name === selector) return device;
+  }
+  return null;
 }
 
 function connectToPhone(host) {
-  if (!host) { console.log('Usage: c <phone-ip>'); return; }
+  const device = getDeviceBySelector(host);
+  const target = device ? device.ip : host;
+  if (!target) { console.log('Usage: c <device-number|phone-ip>'); return; }
   if (socket && !socket.destroyed) socket.destroy();
-  const client = net.createConnection({ host, port: PORT, timeout: 10000 }, () => {
+  const client = net.createConnection({ host: target, port: device?.port || PORT, timeout: 10000 }, () => {
     attachSocket(client);
-    console.log(`Connected to phone at ${host}:${PORT}`);
+    console.log(`Connected to ${device?.name || 'device'} at ${target}:${device?.port || PORT}`);
     prompt();
   });
   client.on('timeout', () => { console.log('\nConnection timed out.'); client.destroy(); });
-  client.on('error', error => { console.log(`\nCould not connect to ${host}:${PORT}: ${error.message}`); prompt(); });
+  client.on('error', error => { console.log(`\nCould not connect to ${target}:${device?.port || PORT}: ${error.message}`); prompt(); });
 }
 
 function callRequest() { send({ type: 'call_request', senderId: DEVICE_ID, senderName: DEFAULT_NAME, timestamp: now() }); }
@@ -233,11 +261,10 @@ function heartbeat() { send({ type: 'heartbeat', senderId: DEVICE_ID, timestamp:
 function status() {
   console.log(`\nTCP server: ${server ? 'running on :5555' : 'stopped'}`);
   console.log(`Discovery server: ${discoveryServer ? 'running on :5556' : 'stopped'}`);
-  console.log(`Discovery scanner: ${scanTimer ? 'running' : 'stopped'}`);
+  console.log(`Discovery scan: ${scanInProgress ? 'running' : 'idle'}`);
   console.log(`Connection: ${socket && !socket.destroyed ? 'connected' : 'not connected'}`);
   if (connectedPeer) console.log(`Peer: ${connectedPeer}`);
-  console.log(`Discovered devices: ${discoveredDevices.size}`);
-  for (const device of discoveredDevices.values()) console.log(`  - ${device.name || device.id} (${device.ip}:${device.port || PORT})`);
+  listDevices();
 }
 
 function help() {
@@ -245,50 +272,58 @@ function help() {
 Commands
 --------
 start                 Start laptop TCP server on port 5555
-discovery             Start BOTH laptop TCP server + discovery server + scanner
-scan                  Scan the local subnet once for iTantra devices
-stop-scan             Stop repeated discovery scanning
-stop-discovery        Stop laptop discovery server
-c <phone-ip>          Connect directly to a phone on TCP 5555
+discovery             Start TCP + discovery servers, then scan once
+scan                  Scan the local subnets once for iTantra devices
+devices               List devices found by the last scan
+c <number|phone-ip>   Connect to a discovered device (e.g. c 1)
 r                     Send call_request
 accept                Send call_accept
 reject                Send call_reject
 s <text>              Send speech_message
 end                   Send call_end
 hb                    Send heartbeat
-status                Show servers, connection and discovered devices
+status                Show servers, connection and devices
+stop-discovery        Stop laptop discovery server
 help                  Show this help
 quit                  Exit
 
-Recommended test
-----------------
+Recommended laptop -> phone test
+----------------------------------
 1. Phone hotspot ON; laptop connects to phone hotspot.
 2. discovery
-3. Wait until the phone appears in the scan results.
-4. c <phone-ip>       (use the IP shown by discovery)
-5. r                  (phone should receive call request)
+3. Wait for "Finished" and the device list.
+4. c 1                 Connect to the first discovered phone.
+5. r                   Send call request to that phone.
 6. Accept on phone.
 7. s Hello from laptop
 8. end
 
-Phone -> laptop
----------------
-The phone should discover "Laptop Test Node" and show its actual laptop IP.
-Tap Call. The laptop terminal should show INCOMING CALL REQUEST.
-Type accept or reject.
+Phone -> laptop test
+-------------------
+1. Keep this terminal running with discovery.
+2. Phone should discover "Laptop Test Node".
+3. Tap Call on the phone.
+4. This terminal should show INCOMING CALL REQUEST.
+5. Type accept or reject.
 `);
+}
+
+function stopDiscoveryServer() {
+  if (!discoveryServer) { console.log('Discovery server is not running.'); return; }
+  discoveryServer.close(() => console.log('Discovery server stopped.'));
+  discoveryServer = null;
 }
 
 function handleCommand(line) {
   const trimmed = line.trim();
   if (!trimmed) return;
-  const [command, ...rest] = trimmed.split(' ');
+  const [command, ...rest] = trimmed.split(/\s+/);
   const argument = rest.join(' ').trim();
   switch (command.toLowerCase()) {
     case 'start': startServer(); break;
-    case 'discovery': startServer(); startDiscoveryServer(); startDiscoveryScan(); break;
+    case 'discovery': startServer(); startDiscoveryServer(); void scanNetwork(); break;
     case 'scan': void scanNetwork(); break;
-    case 'stop-scan': stopDiscoveryScan(); break;
+    case 'devices': case 'list': listDevices(); break;
     case 'stop-discovery': stopDiscoveryServer(); break;
     case 'c': case 'connect': connectToPhone(argument); break;
     case 'r': case 'request': callRequest(); break;
@@ -306,7 +341,6 @@ function handleCommand(line) {
 
 function prompt() { rl.prompt(); }
 function shutdown() {
-  stopDiscoveryScan();
   if (socket && !socket.destroyed) socket.destroy();
   if (server) server.close();
   if (discoveryServer) discoveryServer.close();
@@ -314,7 +348,7 @@ function shutdown() {
 }
 
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout, prompt: 'itantra> ' });
-rl.on('line', line => { handleCommand(line); prompt(); });
+rl.on('line', line => { handleCommand(line); });
 rl.on('close', () => { if (socket && !socket.destroyed) socket.destroy(); if (server) server.close(); if (discoveryServer) discoveryServer.close(); process.exit(0); });
 
 console.log('iTantra Laptop Test Node');
