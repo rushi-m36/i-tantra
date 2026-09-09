@@ -24,15 +24,25 @@ interface DiscoveryResponse {
   port: number;
 }
 
+export interface ScanStatus {
+  scanning: boolean;
+  currentIp: string | null;
+  scanned: number;
+  total: number;
+  found: number;
+}
+
 export class DeviceDiscovery {
   private deviceId: string;
   private deviceName = "";
   private discoveredDevices: Map<string, Device> = new Map();
   private discoveryCallbacks: Array<(devices: Device[]) => void> = [];
+  private scanCallbacks: Array<(status: ScanStatus) => void> = [];
   private broadcastInterval: ReturnType<typeof setInterval> | null = null;
   private cleanupInterval: ReturnType<typeof setInterval> | null = null;
   private discoveryServer: any = null;
   private scanInProgress = false;
+  private scanStatus: ScanStatus = { scanning: false, currentIp: null, scanned: 0, total: 0, found: 0 };
 
   constructor() {
     this.deviceId = generateUUID();
@@ -51,20 +61,12 @@ export class DeviceDiscovery {
     }
   }
 
-  async getNetworkInfo(): Promise<{
-    ip: string;
-    subnet: string;
-    isWifi: boolean;
-  } | null> {
+  async getNetworkInfo(): Promise<{ ip: string; subnet: string; isWifi: boolean } | null> {
     try {
       const state = await NetInfo.fetch();
       const details = state.details as any;
       if (state.type === "wifi" && details?.ipAddress) {
-        return {
-          ip: details.ipAddress,
-          subnet: details.subnet || "255.255.255.0",
-          isWifi: true,
-        };
+        return { ip: details.ipAddress, subnet: details.subnet || "255.255.255.0", isWifi: true };
       }
       return null;
     } catch (e) {
@@ -77,34 +79,34 @@ export class DeviceDiscovery {
     if (device.id === this.deviceId) return;
     device.lastSeen = Date.now();
     this.discoveredDevices.set(device.id, device);
+    this.scanStatus = { ...this.scanStatus, found: this.discoveredDevices.size };
     this.notifyDevicesChanged();
+    this.notifyScanStatus();
   }
 
-  getDeviceId(): string {
-    return this.deviceId;
-  }
-
-  getDeviceName(): string {
-    return this.deviceName;
-  }
+  getDeviceId(): string { return this.deviceId; }
+  getDeviceName(): string { return this.deviceName; }
 
   getDiscoveredDevices(): Device[] {
-    return Array.from(this.discoveredDevices.values()).filter(
-      (d) => d.id !== this.deviceId,
-    );
+    return Array.from(this.discoveredDevices.values()).filter((d) => d.id !== this.deviceId);
   }
 
   onDevicesChanged(callback: (devices: Device[]) => void): void {
     this.discoveryCallbacks.push(callback);
   }
 
+  onScanStatusChanged(callback: (status: ScanStatus) => void): void {
+    this.scanCallbacks.push(callback);
+    callback(this.scanStatus);
+  }
+
+  getScanStatus(): ScanStatus { return this.scanStatus; }
+
   startDiscovery(): void {
     if (this.discoveryServer || this.broadcastInterval) return;
     this.startDiscoveryServer();
     void this.scanLocalNetwork();
-    this.broadcastInterval = setInterval(() => {
-      void this.scanLocalNetwork();
-    }, SCAN_INTERVAL);
+    this.broadcastInterval = setInterval(() => { void this.scanLocalNetwork(); }, SCAN_INTERVAL);
     this.cleanupInterval = setInterval(() => {
       const now = Date.now();
       let changed = false;
@@ -127,10 +129,7 @@ export class DeviceDiscovery {
             buffer += typeof data === "string" ? data : data.toString("utf8");
             if (!buffer.includes("\n")) return;
             const request = buffer.split("\n")[0].trim();
-            if (request !== DISCOVERY_REQUEST) {
-              socket.destroy();
-              return;
-            }
+            if (request !== DISCOVERY_REQUEST) { socket.destroy(); return; }
             const response: DiscoveryResponse = {
               magic: DISCOVERY_REQUEST,
               id: this.deviceId,
@@ -138,9 +137,7 @@ export class DeviceDiscovery {
               port: 5555,
             };
             socket.write(JSON.stringify(response) + "\n", "utf-8", () => socket.destroy());
-          } catch {
-            socket.destroy();
-          }
+          } catch { socket.destroy(); }
         });
         socket.on("error", () => socket.destroy());
       });
@@ -164,19 +161,35 @@ export class DeviceDiscovery {
     try {
       const network = await this.getNetworkInfo();
       if (!network) {
+        this.scanStatus = { scanning: false, currentIp: null, scanned: 0, total: 0, found: this.discoveredDevices.size };
+        this.notifyScanStatus();
         console.log("Device discovery skipped: not connected to Wi-Fi");
         return;
       }
       const addresses = this.getSubnetAddresses(network.ip, network.subnet);
+      this.scanStatus = { scanning: true, currentIp: null, scanned: 0, total: addresses.length, found: this.discoveredDevices.size };
+      this.notifyScanStatus();
       console.log(`Scanning ${addresses.length} local addresses for iTantra devices...`);
+
       for (let index = 0; index < addresses.length; index += MAX_CONCURRENT_SCANS) {
         const batch = addresses.slice(index, index + MAX_CONCURRENT_SCANS);
+        this.scanStatus = { ...this.scanStatus, currentIp: batch[0] || null };
+        this.notifyScanStatus();
         await Promise.all(batch.map((ip) => this.probeDevice(ip)));
+        this.scanStatus = {
+          ...this.scanStatus,
+          scanned: Math.min(index + batch.length, addresses.length),
+          currentIp: addresses[Math.min(index + batch.length, addresses.length) - 1] || null,
+          found: this.discoveredDevices.size,
+        };
+        this.notifyScanStatus();
       }
     } catch (error) {
       console.error("Local network scan failed:", error);
     } finally {
       this.scanInProgress = false;
+      this.scanStatus = { ...this.scanStatus, scanning: false, currentIp: null, found: this.discoveredDevices.size };
+      this.notifyScanStatus();
     }
   }
 
@@ -243,18 +256,8 @@ export class DeviceDiscovery {
             responseBuffer += typeof data === "string" ? data : data.toString("utf8");
             const line = responseBuffer.split("\n")[0];
             const response = JSON.parse(line) as DiscoveryResponse;
-            if (
-              response.magic === DISCOVERY_REQUEST &&
-              response.id && response.id !== this.deviceId && response.name
-            ) {
-              this.addDevice({
-                id: response.id,
-                name: response.name,
-                ip,
-                port: response.port || 5555,
-                status: "available",
-                lastSeen: Date.now(),
-              });
+            if (response.magic === DISCOVERY_REQUEST && response.id && response.id !== this.deviceId && response.name) {
+              this.addDevice({ id: response.id, name: response.name, ip, port: response.port || 5555, status: "available", lastSeen: Date.now() });
             }
           } catch {
             // Ignore non-iTantra responses.
@@ -264,25 +267,16 @@ export class DeviceDiscovery {
         });
         socket.on("error", finish);
         socket.on("close", finish);
-      } catch {
-        finish();
-      }
+      } catch { finish(); }
     });
   }
 
   stopDiscovery(): void {
-    if (this.cleanupInterval) {
-      clearInterval(this.cleanupInterval);
-      this.cleanupInterval = null;
-    }
-    if (this.broadcastInterval) {
-      clearInterval(this.broadcastInterval);
-      this.broadcastInterval = null;
-    }
-    if (this.discoveryServer) {
-      try { this.discoveryServer.close(); } catch {}
-      this.discoveryServer = null;
-    }
+    if (this.cleanupInterval) { clearInterval(this.cleanupInterval); this.cleanupInterval = null; }
+    if (this.broadcastInterval) { clearInterval(this.broadcastInterval); this.broadcastInterval = null; }
+    if (this.discoveryServer) { try { this.discoveryServer.close(); } catch {} this.discoveryServer = null; }
+    this.scanStatus = { ...this.scanStatus, scanning: false, currentIp: null };
+    this.notifyScanStatus();
   }
 
   private notifyDevicesChanged(): void {
@@ -290,10 +284,15 @@ export class DeviceDiscovery {
     this.discoveryCallbacks.forEach((cb) => cb(devices));
   }
 
+  private notifyScanStatus(): void {
+    this.scanCallbacks.forEach((cb) => cb(this.scanStatus));
+  }
+
   cleanup(): void {
     this.stopDiscovery();
     this.discoveredDevices.clear();
     this.discoveryCallbacks = [];
+    this.scanCallbacks = [];
   }
 }
 
