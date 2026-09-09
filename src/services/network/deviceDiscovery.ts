@@ -1,5 +1,5 @@
 import NetInfo from "@react-native-community/netinfo";
-import { getDeviceName, getUniqueId } from "react-native-device-info";
+import { getDeviceName, getUniqueId, getIpAddress } from "react-native-device-info";
 import TcpSocket from "react-native-tcp-socket";
 import { Device } from "../../types/communication";
 
@@ -65,8 +65,26 @@ export class DeviceDiscovery {
     try {
       const state = await NetInfo.fetch();
       const details = state.details as any;
-      const ip = typeof details?.ipAddress === "string" ? details.ipAddress : null;
-      if (!ip) return null;
+
+      // NetInfo can omit ipAddress on some Android builds even though the
+      // device has a working local Wi-Fi/hotspot route. DeviceInfo gets the
+      // actual local address from Android in that case.
+      let ip = typeof details?.ipAddress === "string" ? details.ipAddress : null;
+      if (!ip) {
+        try {
+          const deviceInfoIp = await getIpAddress();
+          if (/^(?:\d{1,3}\.){3}\d{1,3}$/.test(deviceInfoIp)) {
+            ip = deviceInfoIp;
+          }
+        } catch {
+          // Fall through to the normal "no local IPv4" result.
+        }
+      }
+
+      if (!ip || ip === "0.0.0.0") {
+        console.log("Device discovery skipped: no local IPv4 address");
+        return null;
+      }
 
       const subnet =
         typeof details?.subnet === "string" && details.subnet.length > 0
@@ -170,7 +188,6 @@ export class DeviceDiscovery {
       if (!network) {
         this.scanStatus = { scanning: false, currentIp: null, scanned: 0, total: 0, found: this.discoveredDevices.size };
         this.notifyScanStatus();
-        console.log("Device discovery skipped: no local IPv4 address");
         return;
       }
 
@@ -254,10 +271,6 @@ export class DeviceDiscovery {
       };
 
       try {
-        // Do not force the Android "wifi" interface here. Android can report
-        // hotspot/USB/local connections as another NetInfo type while still
-        // providing a perfectly valid local route. Let the OS choose the
-        // correct interface for the destination IP.
         socket = TcpSocket.createConnection(
           { host: ip, port: DISCOVERY_PORT, reuseAddress: true, connectTimeout: CONNECT_TIMEOUT },
           () => socket.write(`${DISCOVERY_REQUEST}\n`),
