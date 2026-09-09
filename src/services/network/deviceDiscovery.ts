@@ -41,11 +41,7 @@ export class DeviceDiscovery {
     try {
       const state = await NetInfo.fetch();
 
-      if (
-        state.type === "wifi" &&
-        state.details.type === "wifi" &&
-        state.details.ipAddress
-      ) {
+      if (state.type === "wifi" && state.details?.ipAddress) {
         return { ip: state.details.ipAddress, isWifi: true };
       }
 
