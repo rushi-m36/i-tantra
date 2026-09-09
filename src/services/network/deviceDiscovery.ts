@@ -18,8 +18,8 @@ export class DeviceDiscovery {
   private deviceName: string = "";
   private discoveredDevices: Map<string, Device> = new Map();
   private discoveryCallbacks: Array<(devices: Device[]) => void> = [];
-  private broadcastInterval: NodeJS.Timeout | null = null;
-  private cleanupInterval: NodeJS.Timeout | null = null;
+  private broadcastInterval: ReturnType<typeof setInterval> | null = null;
+  private cleanupInterval: ReturnType<typeof setInterval> | null = null;
 
   constructor() {
     this.deviceId = generateUUID();
