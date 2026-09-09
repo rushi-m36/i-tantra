@@ -13,7 +13,6 @@ import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.io.OutputStreamWriter
 import java.io.PrintWriter
-import java.net.InetAddress
 import java.net.NetworkInterface
 import java.net.ServerSocket
 import java.net.Socket
@@ -206,8 +205,7 @@ class DiscoveryService : Service() {
     Notification.Builder(this, CHANNEL_ID)
       .setContentTitle("iTantra network ready")
       .setContentText("Listening for nearby iTantra devices")
-      .setSmallIcon(android.R.drawable.stat_sys_data_wifi)
-      .setOngoing(true)
+      .setSmallIcon(android.R.drawable.ic_dialog_info)
       .build()
 
   private fun createChannels() {
