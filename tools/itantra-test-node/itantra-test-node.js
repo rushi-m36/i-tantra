@@ -63,6 +63,12 @@ function attachSocket(newSocket) {
   socket = newSocket;
   buffer = '';
   connectedPeer = `${newSocket.remoteAddress}:${newSocket.remotePort}`;
+
+  // The 10-second timeout is only for establishing a connection.
+  // Once connected, keep the TCP session open indefinitely. A TCP connection
+  // must not be destroyed just because no message was sent for 10 seconds.
+  newSocket.setTimeout(0);
+
   console.log(`\nConnected to ${connectedPeer}`);
   newSocket.setEncoding('utf8');
   newSocket.on('data', handleData);
@@ -240,11 +246,14 @@ function connectToPhone(host) {
   if (!target) { console.log('Usage: c <device-number|phone-ip>'); return; }
   if (socket && !socket.destroyed) socket.destroy();
   const client = net.createConnection({ host: target, port: device?.port || PORT, timeout: 10000 }, () => {
+    // 10s is the connection-establishment timeout only. Disable the idle
+    // timeout after the TCP handshake so calls/messages can remain connected.
+    client.setTimeout(0);
     attachSocket(client);
     console.log(`Connected to ${device?.name || 'device'} at ${target}:${device?.port || PORT}`);
     prompt();
   });
-  client.on('timeout', () => { console.log('\nConnection timed out.'); client.destroy(); });
+  client.on('timeout', () => { console.log('\nConnection timed out while establishing TCP connection.'); client.destroy(); });
   client.on('error', error => { console.log(`\nCould not connect to ${target}:${device?.port || PORT}: ${error.message}`); prompt(); });
 }
 
