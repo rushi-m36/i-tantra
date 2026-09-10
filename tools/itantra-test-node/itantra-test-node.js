@@ -11,6 +11,7 @@ const DISCOVERY_PORT = 5556;
 const DEFAULT_NAME = 'Laptop Test Node';
 const DEVICE_ID = 'laptop-test-node';
 const MAGIC = 'ITANTRA_DISCOVER_V1';
+const TCP_PROBE = 'ITANTRA_PROBE_V1';
 
 let socket = null;
 let server = null;
@@ -32,7 +33,6 @@ function send(message) {
 }
 
 function handleMessage(message) {
-  // Heartbeats are intentionally silent. They must not redraw the readline prompt.
   if (message.type === 'heartbeat') return false;
 
   console.log(`\n[RECV] ${JSON.stringify(message, null, 2)}`);
@@ -59,6 +59,12 @@ function handleData(data) {
     buffer = buffer.slice(index + 1);
     if (!line) continue;
 
+    if (line === TCP_PROBE) {
+      const response = { magic: TCP_PROBE, id: DEVICE_ID, name: DEFAULT_NAME, port: PORT };
+      if (socket && !socket.destroyed) socket.write(JSON.stringify(response) + '\n', 'utf8', () => socket.destroy());
+      continue;
+    }
+
     try {
       if (handleMessage(JSON.parse(line))) shouldPrompt = true;
     } catch (error) {
@@ -67,7 +73,6 @@ function handleData(data) {
     }
   }
 
-  // Only redraw the prompt when a visible/non-heartbeat message arrived.
   if (shouldPrompt) prompt();
 }
 
@@ -76,9 +81,6 @@ function attachSocket(newSocket) {
   socket = newSocket;
   buffer = '';
   connectedPeer = `${newSocket.remoteAddress}:${newSocket.remotePort}`;
-
-  // The 10-second timeout is only for establishing a connection.
-  // Once connected, keep the TCP session open indefinitely.
   newSocket.setTimeout(0);
 
   console.log(`\nConnected to ${connectedPeer}`);
