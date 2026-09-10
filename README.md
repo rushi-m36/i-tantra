@@ -1,6 +1,6 @@
 # iTantra
 
-iTantra is an offline, low bitrate communication system designed for voice and text communication over local networks. It is being developed for ESH Hackathon 2026 with a focus on Indian multilingual speech communication where internet connectivity may be unavailable or unreliable.
+iTantra is an offline, low bitrate communication system designed for voice and text communication over local networks. It is being developed for SIH Hackathon 2026 with a focus on Indian multilingual speech communication where internet connectivity may be unavailable or unreliable.
 
 ## Overview
 
@@ -152,13 +152,13 @@ The current default recognition locale is `en-US`, while the implementation can 
 Install dependencies:
 
 ```bash
-bun install
+npm install
 ```
 
 Start the Expo development server:
 
 ```bash
-bun start
+npm start
 ```
 
 Because iTantra uses native modules such as TCP sockets and speech recognition, use a native Android development build rather than relying only on Expo Go.
@@ -166,13 +166,13 @@ Because iTantra uses native modules such as TCP sockets and speech recognition, 
 Build and run on Android:
 
 ```bash
-bunx expo run:android
+npx expo run:android
 ```
 
 For a release variant:
 
 ```bash
-bunx expo run:android --variant release
+npx expo run:android --variant release
 ```
 
 ## Testing With Two Android Phones
@@ -203,7 +203,7 @@ The repository includes a lightweight Node.js test node for testing TCP communic
 Start it with:
 
 ```bash
-bun tools/itantra-test-node/itantra-test-node.js
+npm tools/itantra-test-node/itantra-test-node.js
 ```
 
 The test node listens on:
