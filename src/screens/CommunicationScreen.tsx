@@ -7,7 +7,8 @@ import { ChatMessage as ChatMessageType } from "../types/communication";
 const BG = "#080808";
 const FG = "#fff";
 const MUTED = "#aaa";
-const BORDER = "#333";
+const BORDER = "#2a2a2a";
+const BUBBLE = "#2b2b2b";
 
 export default function CommunicationScreen() {
   const { messages, currentDevice, localDeviceId, sendMessage, endCall, startSpeechRecognition, stopSpeechRecognition } = useCommunication();
@@ -24,7 +25,7 @@ export default function CommunicationScreen() {
 
   const handleMicPress = async () => {
     setIsListening(true);
-    Animated.spring(pressScale, { toValue: 0.9, useNativeDriver: true }).start();
+    Animated.spring(pressScale, { toValue: 0.92, useNativeDriver: true }).start();
     try { await startSpeechRecognition(); } catch (error) { console.error("Speech recognition failed:", error); setIsListening(false); }
   };
 
@@ -42,23 +43,23 @@ export default function CommunicationScreen() {
 
   return (
     <View style={{ flex: 1, backgroundColor: BG }}>
-      <View style={{ paddingHorizontal: 24, paddingTop: 48, paddingBottom: 16, borderBottomWidth: 1, borderBottomColor: BORDER }}>
+      <View style={{ paddingHorizontal: 22, paddingTop: 48, paddingBottom: 16, borderBottomWidth: 1, borderBottomColor: BORDER }}>
         <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
           <View style={{ flex: 1 }}>
             <Text style={{ fontSize: 11, fontWeight: "700", letterSpacing: 2, color: MUTED }}>CONNECTED</Text>
             <Text style={{ marginTop: 5, fontSize: 21, fontWeight: "700", color: FG }}>{currentDevice?.name || "Device"}</Text>
           </View>
-          <TouchableOpacity onPress={endCall} activeOpacity={0.8} style={{ borderWidth: 1, borderColor: FG, paddingHorizontal: 14, paddingVertical: 9 }}>
+          <TouchableOpacity onPress={endCall} activeOpacity={0.8} style={{ borderWidth: 1, borderColor: FG, borderRadius: 18, paddingHorizontal: 15, paddingVertical: 8 }}>
             <Text style={{ fontWeight: "600", color: FG }}>End</Text>
           </TouchableOpacity>
         </View>
       </View>
 
-      <ScrollView ref={scrollViewRef} style={{ flex: 1 }} contentContainerStyle={{ paddingHorizontal: 24, paddingVertical: 20 }} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" onContentSizeChange={() => scrollViewRef.current?.scrollToEnd({ animated: true })}>
+      <ScrollView ref={scrollViewRef} style={{ flex: 1 }} contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 22, paddingBottom: 24 }} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" onContentSizeChange={() => scrollViewRef.current?.scrollToEnd({ animated: true })}>
         {messages.length === 0 ? (
-          <View style={{ paddingTop: 30 }}>
+          <View style={{ paddingHorizontal: 8, paddingTop: 30 }}>
             <Text style={{ fontSize: 15, color: MUTED }}>No messages yet.</Text>
-            <Text style={{ marginTop: 5, fontSize: 13, color: "#777" }}>Hold the button below to speak.</Text>
+            <Text style={{ marginTop: 5, fontSize: 13, color: "#777" }}>Hold the microphone below to speak.</Text>
           </View>
         ) : messages.map((item: ChatMessageType, index) => {
           const safeItem: ChatMessageType = {
@@ -70,43 +71,47 @@ export default function CommunicationScreen() {
           };
           const own = safeItem.senderId === localDeviceId;
           return (
-            <View key={safeItem.id} style={{ marginBottom: 20, borderBottomWidth: 1, borderBottomColor: BORDER, paddingBottom: 14 }}>
-              <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 5 }}>
-                <Text style={{ fontSize: 11, fontWeight: "700", color: own ? FG : MUTED, textTransform: "uppercase" }}>{own ? "You" : safeItem.senderName}</Text>
-                <Text style={{ fontSize: 10, color: "#777" }}>{new Date(safeItem.timestamp).toLocaleTimeString()}</Text>
+            <View key={safeItem.id} style={{ marginBottom: 14, alignItems: own ? "flex-end" : "flex-start", width: "100%" }}>
+              <View style={{ maxWidth: "82%", alignItems: own ? "flex-end" : "flex-start" }}>
+                <Text style={{ marginHorizontal: 8, marginBottom: 5, fontSize: 10, fontWeight: "700", color: MUTED, textTransform: "uppercase", letterSpacing: 0.8 }}>{own ? "You" : safeItem.senderName}</Text>
+                <View style={{ backgroundColor: own ? BUBBLE : "#1d1d1d", borderRadius: 22, paddingHorizontal: 16, paddingVertical: 11, borderWidth: 1, borderColor: BORDER }}>
+                  <Text style={{ fontSize: 16, lineHeight: 23, color: FG }}>{safeItem.text}</Text>
+                </View>
+                <Text style={{ marginHorizontal: 8, marginTop: 4, fontSize: 9, color: "#666" }}>{new Date(safeItem.timestamp).toLocaleTimeString()}</Text>
               </View>
-              <Text style={{ fontSize: 16, lineHeight: 23, color: FG }}>{safeItem.text}</Text>
             </View>
           );
         })}
       </ScrollView>
 
-      <View style={{ borderTopWidth: 1, borderTopColor: BORDER, paddingHorizontal: 24, paddingTop: 18, paddingBottom: 30 }}>
+      <View style={{ borderTopWidth: 1, borderTopColor: BORDER, paddingHorizontal: 20, paddingTop: 15, paddingBottom: 28 }}>
         <View style={{ alignItems: "center" }}>
           <Pressable onPressIn={handleMicPress} onPressOut={handleMicRelease}>
-            <Animated.View style={{ width: 72, height: 72, borderRadius: 36, backgroundColor: FG, alignItems: "center", justifyContent: "center", transform: [{ scale: pressScale }] }}>
-              <View style={{ width: 18, height: 28, borderWidth: 2, borderColor: BG, borderRadius: 10 }} />
-              <View style={{ position: "absolute", bottom: 15, width: 28, height: 12, borderBottomWidth: 2, borderColor: BG, borderRadius: 10 }} />
+            <Animated.View style={{ width: 68, height: 68, borderRadius: 34, backgroundColor: FG, alignItems: "center", justifyContent: "center", transform: [{ scale: pressScale }] }}>
+              <View style={{ width: 17, height: 27, borderWidth: 2.5, borderColor: BG, borderRadius: 10 }} />
+              <View style={{ position: "absolute", top: 35, width: 28, height: 15, borderBottomWidth: 2.5, borderLeftWidth: 2.5, borderRightWidth: 2.5, borderColor: BG, borderBottomLeftRadius: 14, borderBottomRightRadius: 14 }} />
+              <View style={{ position: "absolute", top: 49, width: 3, height: 6, backgroundColor: BG, borderRadius: 2 }} />
+              <View style={{ position: "absolute", top: 55, width: 15, height: 2.5, backgroundColor: BG, borderRadius: 2 }} />
             </Animated.View>
           </Pressable>
-          <Text style={{ marginTop: 10, fontSize: 13, fontWeight: "600", color: FG }}>{isListening ? "Listening" : "Hold to speak"}</Text>
-          <TouchableOpacity onPress={() => setShowTextInput(true)} style={{ marginTop: 7 }}>
-            <Text style={{ fontSize: 12, color: MUTED, textDecorationLine: "underline" }}>Type a message</Text>
+          <Text style={{ marginTop: 9, fontSize: 12, fontWeight: "600", color: MUTED }}>{isListening ? "Listening…" : "Hold to speak"}</Text>
+          <TouchableOpacity onPress={() => setShowTextInput(true)} activeOpacity={0.7} style={{ marginTop: 8, borderWidth: 1, borderColor: BORDER, borderRadius: 18, paddingHorizontal: 15, paddingVertical: 7 }}>
+            <Text style={{ fontSize: 12, color: FG }}>Type a message</Text>
           </TouchableOpacity>
         </View>
       </View>
 
       <Modal visible={showTextInput} transparent animationType="fade" onRequestClose={() => setShowTextInput(false)}>
-        <View style={{ flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: "rgba(0,0,0,0.85)", padding: 24 }}>
-          <View style={{ width: "100%", maxWidth: 420, backgroundColor: BG, borderWidth: 1, borderColor: FG, padding: 24 }}>
+        <View style={{ flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: "rgba(0,0,0,0.85)", padding: 20 }}>
+          <View style={{ width: "100%", maxWidth: 420, backgroundColor: BG, borderWidth: 1, borderColor: BORDER, borderRadius: 24, padding: 22 }}>
             <Text style={{ fontSize: 20, fontWeight: "700", color: FG }}>Message</Text>
-            <TextInput autoFocus placeholder="Type your message" value={messageText} onChangeText={setMessageText} multiline placeholderTextColor="#777" style={{ marginTop: 16, minHeight: 100, borderWidth: 1, borderColor: BORDER, padding: 12, color: FG, textAlignVertical: "top" }} />
+            <TextInput autoFocus placeholder="Type your message" value={messageText} onChangeText={setMessageText} multiline placeholderTextColor="#777" style={{ marginTop: 16, minHeight: 100, borderWidth: 1, borderColor: BORDER, borderRadius: 18, padding: 14, color: FG, textAlignVertical: "top" }} />
             <View style={{ marginTop: 16, flexDirection: "row", gap: 10 }}>
-              <TouchableOpacity onPress={() => setShowTextInput(false)} style={{ flex: 1, borderWidth: 1, borderColor: FG, paddingVertical: 12 }}>
+              <TouchableOpacity onPress={() => setShowTextInput(false)} activeOpacity={0.8} style={{ flex: 1, borderWidth: 1, borderColor: FG, borderRadius: 18, paddingVertical: 12 }}>
                 <Text style={{ textAlign: "center", fontWeight: "600", color: FG }}>Cancel</Text>
               </TouchableOpacity>
-              <TouchableOpacity onPress={handleSendMessage} disabled={!messageText.trim()} style={{ flex: 1, backgroundColor: messageText.trim() ? FG : "#333", paddingVertical: 12 }}>
-                <Text style={{ textAlign: "center", fontWeight: "600", color: BG }}>Send</Text>
+              <TouchableOpacity onPress={handleSendMessage} disabled={!messageText.trim()} activeOpacity={0.8} style={{ flex: 1, borderRadius: 18, backgroundColor: messageText.trim() ? FG : "#333", paddingVertical: 12 }}>
+                <Text style={{ textAlign: "center", fontWeight: "700", color: BG }}>Send</Text>
               </TouchableOpacity>
             </View>
           </View>
