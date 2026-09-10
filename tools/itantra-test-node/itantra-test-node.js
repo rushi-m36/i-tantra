@@ -32,6 +32,9 @@ function send(message) {
 }
 
 function handleMessage(message) {
+  // Heartbeats are intentionally silent. They must not redraw the readline prompt.
+  if (message.type === 'heartbeat') return false;
+
   console.log(`\n[RECV] ${JSON.stringify(message, null, 2)}`);
   switch (message.type) {
     case 'call_request':
@@ -43,19 +46,29 @@ function handleMessage(message) {
     case 'speech_message': console.log(`\n>>> MESSAGE: ${message.text || ''}`); break;
     case 'call_end': console.log('\n>>> CALL ENDED'); break;
   }
+  return true;
 }
 
 function handleData(data) {
   buffer += data.toString('utf8');
   let index;
+  let shouldPrompt = false;
+
   while ((index = buffer.indexOf('\n')) !== -1) {
     const line = buffer.slice(0, index).trim();
     buffer = buffer.slice(index + 1);
     if (!line) continue;
-    try { handleMessage(JSON.parse(line)); }
-    catch (error) { console.log(`\n[RECV RAW] ${line}\n[WARN] Invalid JSON: ${error.message}`); }
+
+    try {
+      if (handleMessage(JSON.parse(line))) shouldPrompt = true;
+    } catch (error) {
+      console.log(`\n[RECV RAW] ${line}\n[WARN] Invalid JSON: ${error.message}`);
+      shouldPrompt = true;
+    }
   }
-  prompt();
+
+  // Only redraw the prompt when a visible/non-heartbeat message arrived.
+  if (shouldPrompt) prompt();
 }
 
 function attachSocket(newSocket) {
@@ -65,8 +78,7 @@ function attachSocket(newSocket) {
   connectedPeer = `${newSocket.remoteAddress}:${newSocket.remotePort}`;
 
   // The 10-second timeout is only for establishing a connection.
-  // Once connected, keep the TCP session open indefinitely. A TCP connection
-  // must not be destroyed just because no message was sent for 10 seconds.
+  // Once connected, keep the TCP session open indefinitely.
   newSocket.setTimeout(0);
 
   console.log(`\nConnected to ${connectedPeer}`);
@@ -192,7 +204,6 @@ async function scanNetwork() {
       return;
     }
 
-    // Remove stale results before the new scan.
     for (const [id, device] of discoveredDevices) {
       if (now() - device.lastSeen >= 12000) discoveredDevices.delete(id);
     }
@@ -246,8 +257,6 @@ function connectToPhone(host) {
   if (!target) { console.log('Usage: c <device-number|phone-ip>'); return; }
   if (socket && !socket.destroyed) socket.destroy();
   const client = net.createConnection({ host: target, port: device?.port || PORT, timeout: 10000 }, () => {
-    // 10s is the connection-establishment timeout only. Disable the idle
-    // timeout after the TCP handshake so calls/messages can remain connected.
     client.setTimeout(0);
     attachSocket(client);
     console.log(`Connected to ${device?.name || 'device'} at ${target}:${device?.port || PORT}`);
@@ -295,25 +304,6 @@ status                Show servers, connection and devices
 stop-discovery        Stop laptop discovery server
 help                  Show this help
 quit                  Exit
-
-Recommended laptop -> phone test
-----------------------------------
-1. Phone hotspot ON; laptop connects to phone hotspot.
-2. discovery
-3. Wait for "Finished" and the device list.
-4. c 1                 Connect to the first discovered phone.
-5. r                   Send call request to that phone.
-6. Accept on phone.
-7. s Hello from laptop
-8. end
-
-Phone -> laptop test
--------------------
-1. Keep this terminal running with discovery.
-2. Phone should discover "Laptop Test Node".
-3. Tap Call on the phone.
-4. This terminal should show INCOMING CALL REQUEST.
-5. Type accept or reject.
 `);
 }
 
