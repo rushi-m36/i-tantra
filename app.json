@@ -33,7 +33,15 @@
     },
     "plugins": [
       "expo-router",
-      "expo-speech-recognition",
+      [
+        "expo-speech-recognition",
+        {
+          "androidSpeechServicePackages": [
+            "com.google.android.as",
+            "com.google.android.tts"
+          ]
+        }
+      ],
       [
         "expo-splash-screen",
         {
