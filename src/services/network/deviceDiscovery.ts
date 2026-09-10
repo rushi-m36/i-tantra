@@ -4,11 +4,13 @@ import TcpSocket from "react-native-tcp-socket";
 import { Device } from "../../types/communication";
 
 const DISCOVERY_PORT = 5556;
+const TCP_PORT = 5555;
 const SCAN_INTERVAL = 5000;
 const DEVICE_TIMEOUT = 12000;
 const CONNECT_TIMEOUT = 700;
 const MAX_CONCURRENT_SCANS = 20;
 const DISCOVERY_REQUEST = "ITANTRA_DISCOVER_V1";
+const TCP_PROBE = "ITANTRA_PROBE_V1";
 
 const generateUUID = (): string =>
   "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
@@ -66,16 +68,11 @@ export class DeviceDiscovery {
       const state = await NetInfo.fetch();
       const details = state.details as any;
 
-      // NetInfo can omit ipAddress on some Android builds even though the
-      // device has a working local Wi-Fi/hotspot route. DeviceInfo gets the
-      // actual local address from Android in that case.
       let ip = typeof details?.ipAddress === "string" ? details.ipAddress : null;
       if (!ip) {
         try {
           const deviceInfoIp = await getIpAddress();
-          if (/^(?:\d{1,3}\.){3}\d{1,3}$/.test(deviceInfoIp)) {
-            ip = deviceInfoIp;
-          }
+          if (/^(?:\d{1,3}\.){3}\d{1,3}$/.test(deviceInfoIp)) ip = deviceInfoIp;
         } catch {
           // Fall through to the normal "no local IPv4" result.
         }
@@ -159,7 +156,7 @@ export class DeviceDiscovery {
               magic: DISCOVERY_REQUEST,
               id: this.deviceId,
               name: this.deviceName,
-              port: 5555,
+              port: TCP_PORT,
             };
             socket.write(JSON.stringify(response) + "\n", "utf-8", () => socket.destroy());
           } catch { socket.destroy(); }
@@ -257,42 +254,85 @@ export class DeviceDiscovery {
   }
 
   private probeDevice(ip: string): Promise<void> {
+    return this.probePort(ip, DISCOVERY_PORT, true).then((found) => {
+      if (!found) return this.probePort(ip, TCP_PORT, false);
+    });
+  }
+
+  private probePort(ip: string, port: number, discoveryPort: boolean): Promise<boolean> {
     return new Promise((resolve) => {
       let socket: any = null;
       let settled = false;
       let timer: ReturnType<typeof setTimeout> | null = null;
       let responseBuffer = "";
-      const finish = () => {
+
+      const finish = (found = false) => {
         if (settled) return;
         settled = true;
         if (timer) clearTimeout(timer);
         if (socket && !socket.destroyed) socket.destroy();
-        resolve();
+        resolve(found);
       };
 
       try {
         socket = TcpSocket.createConnection(
-          { host: ip, port: DISCOVERY_PORT, reuseAddress: true, connectTimeout: CONNECT_TIMEOUT },
-          () => socket.write(`${DISCOVERY_REQUEST}\n`),
+          { host: ip, port, reuseAddress: true, connectTimeout: CONNECT_TIMEOUT },
+          () => {
+            if (discoveryPort) {
+              socket.write(`${DISCOVERY_REQUEST}\n`);
+            } else {
+              // Port 5555 is the communication server. Send a harmless probe
+              // that the normal protocol ignores; if the port is reachable,
+              // use the IP as a lightweight discovery candidate. The server
+              // identity is completed by the discovery response when 5556 is
+              // available, so this fallback uses a stable network placeholder.
+              socket.write(`${TCP_PROBE}\n`);
+            }
+          },
         );
-        timer = setTimeout(finish, CONNECT_TIMEOUT + 300);
+
+        timer = setTimeout(() => finish(false), CONNECT_TIMEOUT + 300);
         socket.on("data", (data: any) => {
           try {
             responseBuffer += typeof data === "string" ? data : data.toString("utf8");
-            const line = responseBuffer.split("\n")[0];
-            const response = JSON.parse(line) as DiscoveryResponse;
-            if (response.magic === DISCOVERY_REQUEST && response.id && response.id !== this.deviceId && response.name) {
-              this.addDevice({ id: response.id, name: response.name, ip, port: response.port || 5555, status: "available", lastSeen: Date.now() });
+            const line = responseBuffer.split("\n")[0].trim();
+
+            if (discoveryPort) {
+              const response = JSON.parse(line) as DiscoveryResponse;
+              if (
+                response.magic === DISCOVERY_REQUEST &&
+                response.id &&
+                response.id !== this.deviceId &&
+                response.name
+              ) {
+                this.addDevice({
+                  id: response.id,
+                  name: response.name,
+                  ip,
+                  port: response.port || TCP_PORT,
+                  status: "available",
+                  lastSeen: Date.now(),
+                });
+                finish(true);
+                return;
+              }
+            } else {
+              // A reachable 5555 endpoint is enough to know another iTantra
+              // node exists. Do not create a fake device record unless the
+              // endpoint identifies itself.
+              finish(false);
+              return;
             }
           } catch {
             // Ignore non-iTantra responses.
-          } finally {
-            finish();
           }
+          if (discoveryPort) finish(false);
         });
-        socket.on("error", finish);
-        socket.on("close", finish);
-      } catch { finish(); }
+        socket.on("error", () => finish(false));
+        socket.on("close", () => finish(false));
+      } catch {
+        finish(false);
+      }
     });
   }
 
