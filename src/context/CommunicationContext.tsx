@@ -4,7 +4,7 @@ import { DeviceDiscovery, getDeviceDiscovery, ScanStatus } from "../services/net
 import { TCPService } from "../services/network/tcpService";
 import { getSpeechToTextService } from "../services/speech/speechToText";
 import { getTextToSpeechService } from "../services/speech/textToSpeech";
-import { CallAcceptMessage, CallRejectMessage, CallRequestMessage, CallState, ChatMessage, Device, Message, SpeechMessage } from "../types/communication";
+import { CallRequestMessage, CallState, ChatMessage, Device, Message, SpeechMessage } from "../types/communication";
 
 const TCP_PORT = 5555;
 const generateUUID = (): string => "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => { const r = (Math.random() * 16) | 0; const v = c === "x" ? r : (r & 0x3) | 0x8; return v.toString(16); });
@@ -19,9 +19,7 @@ interface CommunicationContextType {
   localDeviceName: string;
   isConnected: boolean;
   incomingCallFrom: Device | null;
-  startServer: () => Promise<void>;
   callDevice: (device: Device) => Promise<void>;
-  selfCall: () => Promise<void>;
   acceptCall: () => Promise<void>;
   rejectCall: () => Promise<void>;
   endCall: () => Promise<void>;
@@ -51,16 +49,21 @@ export function CommunicationProvider({ children }: { children: React.ReactNode 
       case "call_request": {
         const callReq = msg as CallRequestMessage;
         const caller: Device = { id: callReq.senderId, name: callReq.senderName, ip: "", port: TCP_PORT, status: "calling", lastSeen: Date.now() };
-        setIncomingCallFrom(caller); setCurrentDevice(caller); setCallState("incoming"); break;
+        setIncomingCallFrom(caller); setCurrentDevice(caller); setCallState("incoming");
+        break;
       }
       case "call_accept": setCallState("connected"); setIncomingCallFrom(null); setMessages([]); break;
-      case "call_reject": setCallState("rejected"); setIncomingCallFrom(null); setTimeout(() => { setCallState("idle"); setCurrentDevice(null); }, 1500); break;
+      case "call_reject":
+        setCallState("rejected"); setIncomingCallFrom(null);
+        setTimeout(() => { setCallState("idle"); setCurrentDevice(null); }, 1500);
+        break;
       case "speech_message": {
         const speechMsg = msg as SpeechMessage;
         const senderName = speechMsg.senderId === disc.getDeviceId() ? "You (loopback)" : "Remote device";
         const chatMsg: ChatMessage = { id: speechMsg.id, senderId: speechMsg.senderId, senderName, text: speechMsg.text, timestamp: speechMsg.timestamp };
         setMessages((prev) => prev.some((item) => item.id === chatMsg.id) ? prev : [...prev, chatMsg]);
-        void getTextToSpeechService().speak(speechMsg.text); break;
+        void getTextToSpeechService().speak(speechMsg.text);
+        break;
       }
       case "call_end": setCallState("idle"); setCurrentDevice(null); setIncomingCallFrom(null); setMessages([]); break;
       case "heartbeat": break;
@@ -105,22 +108,11 @@ export function CommunicationProvider({ children }: { children: React.ReactNode 
     return () => subscription.remove();
   }, [tcp]);
 
-  const startServer = useCallback(async () => { if (tcp) await tcp.startServer(); }, [tcp]);
   const callDevice = useCallback(async (device: Device) => {
     if (!tcp || !device.ip) return;
     setCurrentDevice(device); setCallState("calling"); setIncomingCallFrom(null);
     try { await tcp.connectToDevice(device.ip, device.port || TCP_PORT); await tcp.sendMessage({ type: "call_request", senderId: deviceId, senderName: deviceName, timestamp: Date.now() }); }
     catch (error) { console.error("Failed to call device:", error); await tcp.disconnect(); setCallState("idle"); setCurrentDevice(null); }
-  }, [tcp, deviceId, deviceName]);
-
-  const selfCall = useCallback(async () => {
-    if (!tcp || !deviceId) return;
-    const selfDevice: Device = { id: deviceId, name: `${deviceName || "This device"} (Self Test)`, ip: "127.0.0.1", port: TCP_PORT, status: "connected", lastSeen: Date.now() };
-    setCurrentDevice(selfDevice); setMessages([]); setCallState("calling"); setIncomingCallFrom(null);
-    try {
-      await tcp.startServer(); await tcp.connectToDevice("127.0.0.1", TCP_PORT); await tcp.sendMessage({ type: "call_request", senderId: deviceId, senderName: deviceName || "This device", timestamp: Date.now() });
-      setTimeout(async () => { try { await tcp.sendMessage({ type: "call_accept", senderId: deviceId, timestamp: Date.now() }); setCallState("connected"); setIncomingCallFrom(null); setCurrentDevice(selfDevice); } catch (error) { console.error("Self-call accept failed:", error); await tcp.disconnect(); setCallState("idle"); setCurrentDevice(null); } }, 300);
-    } catch (error) { console.error("Failed to self-call:", error); await tcp.disconnect(); setCallState("idle"); setCurrentDevice(null); }
   }, [tcp, deviceId, deviceName]);
 
   const acceptCall = useCallback(async () => {
@@ -148,11 +140,11 @@ export function CommunicationProvider({ children }: { children: React.ReactNode 
     setMessages((prev) => prev.some((item) => item.id === msg.id) ? prev : [...prev, { id: msg.id, senderId: deviceId, senderName: deviceName || "You", text: trimmed, timestamp: msg.timestamp }]);
   }, [tcp, deviceId, deviceName]);
 
-  const startSpeechRecognition = useCallback(async () => { const stt = getSpeechToTextService(); const text = await stt.listenForSpeech(); if (text?.trim()) await sendMessage(text); }, [sendMessage]);
+  const startSpeechRecognition = useCallback(async () => { const text = await getSpeechToTextService().listenForSpeech(); if (text?.trim()) await sendMessage(text); }, [sendMessage]);
   const stopSpeechRecognition = useCallback(async () => { await getSpeechToTextService().stopListening(); }, []);
   const cleanup = useCallback(async () => { await tcp?.cleanup(); discovery?.cleanup(); await getSpeechToTextService().cleanup(); await getTextToSpeechService().cleanup(); }, [tcp, discovery]);
 
-  return <CommunicationContext.Provider value={{ devices, scanStatus, callState, messages, currentDevice, localDeviceId: deviceId, localDeviceName: deviceName, isConnected, incomingCallFrom, startServer, callDevice, selfCall, acceptCall, rejectCall, endCall, sendMessage, startSpeechRecognition, stopSpeechRecognition, cleanup }}>{children}</CommunicationContext.Provider>;
+  return <CommunicationContext.Provider value={{ devices, scanStatus, callState, messages, currentDevice, localDeviceId: deviceId, localDeviceName: deviceName, isConnected, incomingCallFrom, callDevice, acceptCall, rejectCall, endCall, sendMessage, startSpeechRecognition, stopSpeechRecognition, cleanup }}>{children}</CommunicationContext.Provider>;
 }
 
 export function useCommunication() {
