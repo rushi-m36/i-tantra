@@ -8,38 +8,22 @@ export function IncomingCallModal() {
   if (callState !== "incoming" || !incomingCallFrom) return null;
 
   return (
-    <View className="absolute inset-0 items-center justify-center bg-black/60 px-6">
-      <View className="w-full max-w-md border border-black bg-white px-7 py-8">
-        <View className="items-center border-b border-gray-200 pb-6">
-          <View className="mb-5 h-16 w-16 items-center justify-center rounded-full bg-black">
-            <Text className="text-2xl font-bold text-white">i</Text>
+    <View className="absolute inset-0 items-center justify-center bg-black/85 px-6">
+      <View style={{ width: "100%", maxWidth: 420, borderWidth: 1, borderColor: "#fff", backgroundColor: "#080808", paddingHorizontal: 28, paddingVertical: 32 }}>
+        <View style={{ alignItems: "center", borderBottomWidth: 1, borderBottomColor: "#333", paddingBottom: 24 }}>
+          <View style={{ marginBottom: 18, height: 64, width: 64, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: "#fff" }}>
+            <Text style={{ fontSize: 26, fontWeight: "700", color: "#fff" }}>i</Text>
           </View>
-          <Text className="text-xs font-semibold uppercase tracking-widest text-gray-500">
-            Incoming call
-          </Text>
-          <Text className="mt-3 text-center text-2xl font-bold text-black">
-            {incomingCallFrom.name}
-          </Text>
-          <Text className="mt-1 text-center text-base text-gray-600">
-            wants to communicate with you
-          </Text>
+          <Text style={{ fontSize: 11, fontWeight: "600", letterSpacing: 2, color: "#aaa", textTransform: "uppercase" }}>Incoming call</Text>
+          <Text style={{ marginTop: 12, textAlign: "center", fontSize: 25, fontWeight: "700", color: "#fff" }}>{incomingCallFrom.name}</Text>
+          <Text style={{ marginTop: 5, textAlign: "center", fontSize: 14, color: "#888" }}>wants to communicate with you</Text>
         </View>
-
-        <View className="mt-6 gap-3">
-          <TouchableOpacity
-            onPress={acceptCall}
-            activeOpacity={0.8}
-            className="h-14 items-center justify-center bg-black"
-          >
-            <Text className="text-base font-semibold text-white">Accept</Text>
+        <View style={{ marginTop: 24, gap: 12 }}>
+          <TouchableOpacity onPress={acceptCall} activeOpacity={0.8} style={{ height: 54, alignItems: "center", justifyContent: "center", backgroundColor: "#fff" }}>
+            <Text style={{ fontSize: 15, fontWeight: "700", color: "#000" }}>Accept</Text>
           </TouchableOpacity>
-
-          <TouchableOpacity
-            onPress={rejectCall}
-            activeOpacity={0.8}
-            className="h-14 items-center justify-center border border-black bg-white"
-          >
-            <Text className="text-base font-semibold text-black">Decline</Text>
+          <TouchableOpacity onPress={rejectCall} activeOpacity={0.8} style={{ height: 54, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: "#fff", backgroundColor: "#080808" }}>
+            <Text style={{ fontSize: 15, fontWeight: "600", color: "#fff" }}>Decline</Text>
           </TouchableOpacity>
         </View>
       </View>
