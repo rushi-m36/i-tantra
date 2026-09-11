@@ -1,6 +1,8 @@
 import { useRouter } from "expo-router";
 import { useEffect } from "react";
+import { View } from "react-native";
 import "../../global.css";
+import { BottomNav } from "../components/BottomNav";
 import { IncomingCallModal } from "../components/IncomingCallModal";
 import { useCommunication } from "../context/CommunicationContext";
 import AvailableDevicesScreen from "../screens/AvailableDevicesScreen";
@@ -12,20 +14,21 @@ export default function App() {
 
   useEffect(() => {
     if (callState === "connected") {
-      router.push("/communication");
-    } else if (callState === "idle" && router.canGoBack()) {
-      router.back();
+      router.replace("/communication");
     }
   }, [callState, router]);
 
+  if (callState === "connected") {
+    return <CommunicationScreen />;
+  }
+
   return (
-    <>
-      {callState === "connected" ? (
-        <CommunicationScreen />
-      ) : (
+    <View style={{ flex: 1, backgroundColor: "#080808" }}>
+      <View style={{ flex: 1 }}>
         <AvailableDevicesScreen />
-      )}
+      </View>
+      <BottomNav />
       <IncomingCallModal />
-    </>
+    </View>
   );
 }
