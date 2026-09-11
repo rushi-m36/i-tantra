@@ -62,8 +62,8 @@ export default function AvailableDevicesScreen() {
             <Text style={{ marginTop: 8, color: "#888" }}>Please wait...</Text>
           </View>
           {callState === "calling" && (
-            <TouchableOpacity onPress={() => void handleCancelCall()} activeOpacity={0.8} accessibilityLabel="Cancel call" style={{ width: 48, height: 48, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: "#555", borderRadius: 24 }}>
-              <Text style={{ fontSize: 26, lineHeight: 28, color: "#fff" }}>×</Text>
+            <TouchableOpacity onPress={() => void handleCancelCall()} activeOpacity={0.8} accessibilityLabel="Cancel call" style={{ marginLeft: 20, height: 40, minWidth: 88, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: "#444", borderRadius: 10, paddingHorizontal: 18 }}>
+              <Text style={{ fontSize: 14, fontWeight: "600", color: "#ddd" }}>Cancel</Text>
             </TouchableOpacity>
           )}
         </View>
@@ -80,12 +80,12 @@ export default function AvailableDevicesScreen() {
           <Text style={{ fontSize: 11, fontWeight: "600", letterSpacing: 2, color: "#aaa", textTransform: "uppercase" }}>iTantra</Text>
           <Text style={{ marginTop: 8, fontSize: 30, fontWeight: "700", color: "#fff" }}>Devices</Text>
         </View>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
-          <TouchableOpacity onPress={handleRefresh} disabled={scanStatus.scanning} activeOpacity={0.8} accessibilityLabel="Refresh device discovery" style={{ width: 42, height: 42, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: "#555", borderRadius: 21, opacity: scanStatus.scanning ? 0.45 : 1 }}>
-            {scanStatus.scanning ? <ActivityIndicator size="small" color="#fff" /> : <Text style={{ fontSize: 22, color: "#fff" }}>↻</Text>}
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+          <TouchableOpacity onPress={handleRefresh} disabled={scanStatus.scanning} activeOpacity={0.8} accessibilityLabel="Refresh device discovery" style={{ height: 38, minWidth: 82, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: "#444", borderRadius: 10, paddingHorizontal: 14, opacity: scanStatus.scanning ? 0.45 : 1 }}>
+            {scanStatus.scanning ? <ActivityIndicator size="small" color="#fff" /> : <Text style={{ fontSize: 13, fontWeight: "600", color: "#ddd" }}>Refresh</Text>}
           </TouchableOpacity>
-          <TouchableOpacity onPress={() => setShowAddDevice(true)} activeOpacity={0.8} style={{ borderWidth: 1, borderColor: "#fff", borderRadius: 20, paddingHorizontal: 16, paddingVertical: 9 }}>
-            <Text style={{ fontWeight: "600", color: "#fff" }}>Add device</Text>
+          <TouchableOpacity onPress={() => setShowAddDevice(true)} activeOpacity={0.8} style={{ height: 38, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: "#fff", borderRadius: 10, paddingHorizontal: 15 }}>
+            <Text style={{ fontSize: 13, fontWeight: "600", color: "#fff" }}>Add device</Text>
           </TouchableOpacity>
         </View>
       </View>
