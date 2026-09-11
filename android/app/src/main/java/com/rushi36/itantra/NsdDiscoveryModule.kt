@@ -28,7 +28,7 @@ class NsdDiscoveryModule(private val reactContext: ReactApplicationContext) : Re
       val serviceInfo = NsdServiceInfo().apply {
         serviceName = "iTantra-${deviceId.takeLast(8)}"
         serviceType = this@NsdDiscoveryModule.serviceType
-        servicePort = port
+        this.port = port
       }
 
       val listener = object : NsdManager.RegistrationListener {
@@ -61,11 +61,11 @@ class NsdDiscoveryModule(private val reactContext: ReactApplicationContext) : Re
               override fun onServiceResolved(info: NsdServiceInfo) {
                 if (stopped) return
                 val host = info.host?.hostAddress ?: return
-                if (info.servicePort <= 0) return
+                if (info.port <= 0) return
                 val params = Arguments.createMap().apply {
                   putString("serviceName", info.serviceName)
                   putString("host", host)
-                  putInt("port", info.servicePort)
+                  putInt("port", info.port)
                 }
                 reactContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
                   .emit("itantraNsdDeviceFound", params)
