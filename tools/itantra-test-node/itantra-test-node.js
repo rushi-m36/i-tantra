@@ -2,24 +2,30 @@
 'use strict';
 
 const net = require('node:net');
+const dgram = require('node:dgram');
 const os = require('node:os');
 const readline = require('node:readline');
 const crypto = require('node:crypto');
 
 const PORT = 5555;
 const DISCOVERY_PORT = 5556;
+const MDNS_PORT = 5353;
+const MDNS_ADDRESS = '224.0.0.251';
+const SERVICE_TYPE = '_itantra._tcp.local';
 const DEFAULT_NAME = 'Laptop Test Node';
 const DEVICE_ID = 'laptop-test-node';
+const HOSTNAME = 'itantra-laptop.local';
 const MAGIC = 'ITANTRA_DISCOVER_V1';
 const TCP_PROBE = 'ITANTRA_PROBE_V1';
 
 let socket = null;
 let server = null;
 let discoveryServer = null;
-let scanInProgress = false;
+let mdnsSocket = null;
+let mdnsTimer = null;
 let buffer = '';
 let connectedPeer = null;
-let discoveredDevices = new Map();
+let localIPv4 = null;
 
 function now() { return Date.now(); }
 
@@ -80,8 +86,6 @@ function attachSocket(newSocket) {
 
   console.log(`\nConnected to ${connectedPeer}`);
 
-  // A probe on port 5555 is a temporary discovery connection. It must not
-  // replace or close the existing persistent communication connection.
   let firstChunk = true;
   let probeBuffer = '';
   const onData = data => {
@@ -97,7 +101,6 @@ function attachSocket(newSocket) {
             socket = previousSocket && !previousSocket.destroyed ? previousSocket : null;
             connectedPeer = socket ? `${socket.remoteAddress}:${socket.remotePort}` : null;
           }
-          console.log(`[DISCOVERY] TCP probe answered without replacing persistent connection`);
           return;
         }
         firstChunk = false;
@@ -137,7 +140,6 @@ function startDiscoveryServer() {
   discoveryServer = net.createServer(client => {
     let requestBuffer = '';
     const remote = `${client.remoteAddress}:${client.remotePort}`;
-    console.log(`\n[DISCOVERY] Request from ${remote}`);
     client.setEncoding('utf8');
     client.on('data', data => {
       requestBuffer += data;
@@ -146,7 +148,7 @@ function startDiscoveryServer() {
       if (request !== MAGIC) { client.destroy(); return; }
       const response = { magic: MAGIC, id: DEVICE_ID, name: DEFAULT_NAME, port: PORT };
       client.write(JSON.stringify(response) + '\n', 'utf8', () => client.destroy());
-      console.log(`[DISCOVERY] Sent ${DEFAULT_NAME} to ${remote}`);
+      console.log(`[FALLBACK] Discovery request from ${remote}`);
     });
   });
   discoveryServer.on('error', error => {
@@ -154,142 +156,143 @@ function startDiscoveryServer() {
     if (error.code === 'EADDRINUSE') console.error(`Port ${DISCOVERY_PORT} is already in use.`);
   });
   discoveryServer.listen(DISCOVERY_PORT, '0.0.0.0', () => {
-    console.log(`\nDiscovery server listening on 0.0.0.0:${DISCOVERY_PORT}`);
-    console.log('Phones can discover this laptop.');
+    console.log(`\nTCP fallback discovery listening on 0.0.0.0:${DISCOVERY_PORT}`);
     prompt();
   });
+}
+
+function encodeName(name) {
+  const labels = name.split('.');
+  const parts = [];
+  for (const label of labels) {
+    const bytes = Buffer.from(label, 'utf8');
+    parts.push(Buffer.from([bytes.length]), bytes);
+  }
+  parts.push(Buffer.from([0]));
+  return Buffer.concat(parts);
+}
+
+function u16(value) {
+  const b = Buffer.alloc(2);
+  b.writeUInt16BE(value & 0xffff, 0);
+  return b;
+}
+
+function u32(value) {
+  const b = Buffer.alloc(4);
+  b.writeUInt32BE(value >>> 0, 0);
+  return b;
+}
+
+function txtRecord(key, value) {
+  const text = Buffer.from(`${key}=${value}`, 'utf8');
+  return Buffer.concat([Buffer.from([text.length]), text]);
+}
+
+function buildMdnsResponse() {
+  if (!localIPv4) return null;
+
+  const serviceName = `${DEFAULT_NAME}.${SERVICE_TYPE}`;
+  const serviceNameBytes = encodeName(serviceName);
+  const serviceTypeBytes = encodeName(SERVICE_TYPE);
+  const hostnameBytes = encodeName(HOSTNAME);
+  const records = [];
+
+  // PTR: _itantra._tcp.local -> Laptop Test Node._itantra._tcp.local
+  records.push(Buffer.concat([
+    serviceTypeBytes,
+    u16(12), u16(1), u32(120),
+    u16(serviceNameBytes.length), serviceNameBytes,
+  ]));
+
+  // SRV: service instance -> hostname + TCP port
+  const srvData = Buffer.concat([u16(0), u16(0), u16(PORT), hostnameBytes]);
+  records.push(Buffer.concat([
+    serviceNameBytes,
+    u16(33), u16(1), u32(120), u16(srvData.length), srvData,
+  ]));
+
+  // TXT metadata. The phone can resolve the service even without reading this.
+  const txtData = Buffer.concat([
+    txtRecord('id', DEVICE_ID),
+    txtRecord('name', DEFAULT_NAME),
+    txtRecord('port', String(PORT)),
+  ]);
+  records.push(Buffer.concat([
+    serviceNameBytes,
+    u16(16), u16(1), u32(120), u16(txtData.length), txtData,
+  ]));
+
+  // A: hostname -> laptop IPv4
+  const address = Buffer.from(localIPv4.split('.').map(Number));
+  records.push(Buffer.concat([
+    hostnameBytes,
+    u16(1), u16(1), u32(120), u16(4), address,
+  ]));
+
+  const header = Buffer.concat([
+    u16(0), u16(0x8400), u16(0), u16(records.length), u16(0), u16(0),
+  ]);
+
+  return Buffer.concat([header, ...records]);
+}
+
+function startMdns() {
+  if (mdnsSocket) return;
+
+  localIPv4 = getLocalIPv4();
+  if (!localIPv4) {
+    console.log('\nNo local IPv4 address available; mDNS advertisement not started.');
+    return;
+  }
+
+  mdnsSocket = dgram.createSocket({ type: 'udp4', reuseAddr: true });
+  mdnsSocket.on('error', error => console.error(`\nmDNS error: ${error.message}`));
+  mdnsSocket.bind(MDNS_PORT, '0.0.0.0', () => {
+    try {
+      mdnsSocket.addMembership(MDNS_ADDRESS);
+      mdnsSocket.setMulticastTTL(255);
+      mdnsSocket.setMulticastLoopback(true);
+    } catch (error) {
+      console.error(`\nmDNS multicast setup error: ${error.message}`);
+    }
+
+    advertiseMdns();
+    mdnsTimer = setInterval(advertiseMdns, 5000);
+    console.log(`mDNS advertisement active: ${SERVICE_TYPE} -> ${localIPv4}:${PORT}`);
+    prompt();
+  });
+}
+
+function advertiseMdns() {
+  if (!mdnsSocket) return;
+  const packet = buildMdnsResponse();
+  if (!packet) return;
+  mdnsSocket.send(packet, 0, packet.length, MDNS_PORT, MDNS_ADDRESS, error => {
+    if (error) console.error(`\nmDNS send error: ${error.message}`);
+  });
+}
+
+function stopMdns() {
+  if (mdnsTimer) clearInterval(mdnsTimer);
+  mdnsTimer = null;
+  if (mdnsSocket) mdnsSocket.close();
+  mdnsSocket = null;
 }
 
 function getLocalIPv4() {
   const interfaces = os.networkInterfaces();
-  const addresses = [];
+  const preferred = [];
+  const fallback = [];
   for (const [name, entries] of Object.entries(interfaces)) {
     for (const entry of entries || []) {
-      if (entry.family === 'IPv4' && !entry.internal) addresses.push({ name, address: entry.address, netmask: entry.netmask });
+      if (entry.family !== 'IPv4' || entry.internal) continue;
+      const item = { name, address: entry.address };
+      if (/wi-?fi|wlan|wireless/i.test(name)) preferred.push(item);
+      else if (!/virtual|vmware|vbox|bluetooth|tether|loopback/i.test(name)) fallback.push(item);
     }
   }
-  return addresses;
-}
-
-function selectScanInterfaces() {
-  const addresses = getLocalIPv4();
-  const preferred = addresses.filter(x => /wi-?fi|wlan|wireless/i.test(x.name));
-  const ethernet = addresses.filter(x => !/loopback|wi-?fi|wlan|wireless|virtual|vmware|vbox|bluetooth|usb|rndis|tether/i.test(x.name));
-  const selected = preferred.length ? preferred : ethernet;
-  return selected.length ? selected : addresses;
-}
-
-function ipToInt(ip) { return ip.split('.').reduce((n, p) => ((n << 8) | Number(p)) >>> 0, 0); }
-function intToIp(n) { return [n >>> 24, (n >>> 16) & 255, (n >>> 8) & 255, n & 255].join('.'); }
-
-function getSubnetAddresses(ip, mask) {
-  const ipInt = ipToInt(ip), maskInt = ipToInt(mask);
-  const network = (ipInt & maskInt) >>> 0;
-  const broadcast = (network | (~maskInt >>> 0)) >>> 0;
-  const size = broadcast - network - 1;
-  if (size <= 0 || size > 1022) return [];
-  const result = [];
-  for (let i = network + 1; i < broadcast; i++) result.push(intToIp(i >>> 0));
-  return result;
-}
-
-function probeDevice(ip) {
-  return new Promise(resolve => {
-    const client = net.createConnection({ host: ip, port: DISCOVERY_PORT, timeout: 700 }, () => client.write(MAGIC + '\n'));
-    let data = '';
-    client.setEncoding('utf8');
-    client.on('data', chunk => {
-      data += chunk;
-      const line = data.split('\n')[0].trim();
-      try {
-        const response = JSON.parse(line);
-        if (response.magic === MAGIC && response.id && response.id !== DEVICE_ID) {
-          discoveredDevices.set(response.id, { ...response, ip, lastSeen: now() });
-          console.log(`[DISCOVERY] Found ${response.name || response.id} at ${ip}:${response.port || PORT}`);
-        }
-      } catch {}
-      client.destroy();
-    });
-    client.on('error', () => resolve(null));
-    client.on('timeout', () => client.destroy());
-    client.on('close', () => resolve(true));
-  });
-}
-
-async function scanNetwork() {
-  if (scanInProgress) {
-    console.log('Discovery scan is already running.');
-    return;
-  }
-
-  scanInProgress = true;
-  try {
-    const interfaces = selectScanInterfaces();
-    if (!interfaces.length) {
-      console.log('\nNo usable local IPv4 interface found.');
-      return;
-    }
-
-    for (const [id, device] of discoveredDevices) {
-      if (now() - device.lastSeen >= 12000) discoveredDevices.delete(id);
-    }
-
-    for (const network of interfaces) {
-      const targets = getSubnetAddresses(network.address, network.netmask);
-      if (!targets.length) continue;
-      console.log(`\n[DISCOVERY SCAN] ${network.name}: ${network.address} / ${network.netmask}`);
-      console.log(`[DISCOVERY SCAN] Scanning ${targets.length} addresses on port ${DISCOVERY_PORT}...`);
-      for (let i = 0; i < targets.length; i += 20) {
-        await Promise.all(targets.slice(i, i + 20).map(probeDevice));
-      }
-    }
-
-    console.log(`\n[DISCOVERY SCAN] Finished. Found ${discoveredDevices.size} iTantra device(s).`);
-    listDevices();
-  } finally {
-    scanInProgress = false;
-    prompt();
-  }
-}
-
-function listDevices() {
-  if (!discoveredDevices.size) {
-    console.log('No discovered iTantra devices. Run: scan');
-    return;
-  }
-  console.log('\nDiscovered devices:');
-  let index = 1;
-  for (const device of discoveredDevices.values()) {
-    console.log(`  ${index}. ${device.name || device.id} - ${device.ip}:${device.port || PORT}`);
-    index++;
-  }
-}
-
-function getDeviceBySelector(selector) {
-  if (!selector) return null;
-  if (/^\d+$/.test(selector)) {
-    const index = Number(selector);
-    return Array.from(discoveredDevices.values())[index - 1] || null;
-  }
-  for (const device of discoveredDevices.values()) {
-    if (device.ip === selector || device.id === selector || device.name === selector) return device;
-  }
-  return null;
-}
-
-function connectToPhone(host) {
-  const device = getDeviceBySelector(host);
-  const target = device ? device.ip : host;
-  if (!target) { console.log('Usage: c <device-number|phone-ip>'); return; }
-  if (socket && !socket.destroyed) socket.destroy();
-  const client = net.createConnection({ host: target, port: device?.port || PORT, timeout: 10000 }, () => {
-    client.setTimeout(0);
-    attachSocket(client);
-    console.log(`Connected to ${device?.name || 'device'} at ${target}:${device?.port || PORT}`);
-    prompt();
-  });
-  client.on('timeout', () => { console.log('\nConnection timed out while establishing TCP connection.'); client.destroy(); });
-  client.on('error', error => { console.log(`\nCould not connect to ${target}:${device?.port || PORT}: ${error.message}`); prompt(); });
+  return (preferred[0] || fallback[0])?.address || null;
 }
 
 function callRequest() { send({ type: 'call_request', senderId: DEVICE_ID, senderName: DEFAULT_NAME, timestamp: now() }); }
@@ -304,11 +307,10 @@ function heartbeat() { send({ type: 'heartbeat', senderId: DEVICE_ID, timestamp:
 
 function status() {
   console.log(`\nTCP server: ${server ? 'running on :5555' : 'stopped'}`);
-  console.log(`Discovery server: ${discoveryServer ? 'running on :5556' : 'stopped'}`);
-  console.log(`Discovery scan: ${scanInProgress ? 'running' : 'idle'}`);
+  console.log(`mDNS: ${mdnsSocket ? `advertising ${SERVICE_TYPE}` : 'stopped'}`);
+  console.log(`TCP fallback discovery: ${discoveryServer ? 'running on :5556' : 'stopped'}`);
   console.log(`Connection: ${socket && !socket.destroyed ? 'connected' : 'not connected'}`);
   if (connectedPeer) console.log(`Peer: ${connectedPeer}`);
-  listDevices();
 }
 
 function help() {
@@ -316,27 +318,40 @@ function help() {
 Commands
 --------
 start                 Start laptop TCP server on port 5555
-discovery             Start TCP + discovery servers, then scan once
-scan                  Scan the local subnets once for iTantra devices
-devices               List devices found by the last scan
-c <number|phone-ip>   Connect to a discovered device (e.g. c 1)
+discovery             Start TCP + mDNS + TCP fallback discovery
+c <phone-ip>          Connect directly to a phone on TCP port 5555
 r                     Send call_request
 accept                Send call_accept
 reject                Send call_reject
 s <text>              Send speech_message
 end                   Send call_end
 hb                    Send heartbeat
-status                Show servers, connection and devices
-stop-discovery        Stop laptop discovery server
+status                Show server, mDNS and connection status
+stop-discovery        Stop mDNS + TCP fallback discovery
 help                  Show this help
 quit                  Exit
 `);
 }
 
-function stopDiscoveryServer() {
-  if (!discoveryServer) { console.log('Discovery server is not running.'); return; }
-  discoveryServer.close(() => console.log('Discovery server stopped.'));
-  discoveryServer = null;
+function stopDiscovery() {
+  stopMdns();
+  if (discoveryServer) {
+    discoveryServer.close(() => console.log('TCP fallback discovery stopped.'));
+    discoveryServer = null;
+  }
+}
+
+function connectToPhone(host) {
+  if (!host) { console.log('Usage: c <phone-ip>'); return; }
+  if (socket && !socket.destroyed) socket.destroy();
+  const client = net.createConnection({ host, port: PORT, timeout: 10000 }, () => {
+    client.setTimeout(0);
+    attachSocket(client);
+    console.log(`Connected to phone at ${host}:${PORT}`);
+    prompt();
+  });
+  client.on('timeout', () => { console.log('\nConnection timed out while establishing TCP connection.'); client.destroy(); });
+  client.on('error', error => { console.log(`\nCould not connect to ${host}:${PORT}: ${error.message}`); prompt(); });
 }
 
 function handleCommand(line) {
@@ -346,10 +361,9 @@ function handleCommand(line) {
   const argument = rest.join(' ').trim();
   switch (command.toLowerCase()) {
     case 'start': startServer(); break;
-    case 'discovery': startServer(); startDiscoveryServer(); void scanNetwork(); break;
-    case 'scan': void scanNetwork(); break;
-    case 'devices': case 'list': listDevices(); break;
-    case 'stop-discovery': stopDiscoveryServer(); break;
+    case 'discovery': startServer(); startDiscoveryServer(); startMdns(); break;
+    case 'devices': console.log('Device discovery is handled by Android NSD on the phone.'); break;
+    case 'stop-discovery': stopDiscovery(); break;
     case 'c': case 'connect': connectToPhone(argument); break;
     case 'r': case 'request': callRequest(); break;
     case 'accept': callAccept(); break;
@@ -365,19 +379,26 @@ function handleCommand(line) {
 }
 
 function prompt() { rl.prompt(); }
+
 function shutdown() {
   if (socket && !socket.destroyed) socket.destroy();
   if (server) server.close();
-  if (discoveryServer) discoveryServer.close();
+  stopDiscovery();
   rl.close();
 }
 
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout, prompt: 'itantra> ' });
 rl.on('line', line => { handleCommand(line); });
-rl.on('close', () => { if (socket && !socket.destroyed) socket.destroy(); if (server) server.close(); if (discoveryServer) discoveryServer.close(); process.exit(0); });
+rl.on('close', () => {
+  if (socket && !socket.destroyed) socket.destroy();
+  if (server) server.close();
+  stopDiscovery();
+  process.exit(0);
+});
 
 console.log('iTantra Laptop Test Node');
-console.log('TCP communication port: 5555');
-console.log('TCP discovery port: 5556');
+console.log(`TCP communication port: ${PORT}`);
+console.log(`mDNS service: ${SERVICE_TYPE}`);
+console.log(`TCP fallback discovery port: ${DISCOVERY_PORT}`);
 console.log('Type "help" for commands.');
 prompt();
