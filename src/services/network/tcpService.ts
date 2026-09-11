@@ -63,7 +63,6 @@ export class TCPService {
       const cleanupStartPromise = () => { if (this.startPromise === startPromise) this.startPromise = null; };
       try {
         server = TcpSocket.createServer((socket: any) => {
-          console.log("TCP client connected:", socket.address());
           if (typeof socket.setTimeout === "function") socket.setTimeout(0);
           let isFirstData = true;
           let probeBuffer = "";
@@ -90,7 +89,6 @@ export class TCPService {
                         if (!socket.destroyed) socket.destroy();
                       });
                     }
-                    console.log("TCP discovery probe answered without replacing persistent connection");
                     return;
                   }
                   isFirstData = false;
@@ -106,7 +104,6 @@ export class TCPService {
           });
           socket.on("error", (err: any) => console.error("TCP server socket error:", err));
           socket.on("close", () => {
-            console.log("TCP client disconnected");
             if (this.serverSocket === socket) this.serverSocket = null;
             if (connectionActivated && !this.clientSocket) {
               this.stopHeartbeat();
@@ -125,7 +122,7 @@ export class TCPService {
         });
         server.on("close", () => { if (this.server === server) this.server = null; });
         server.listen({ port: SERVER_PORT, host: "0.0.0.0", reuseAddress: true }, () => {
-          if (!settled) { settled = true; cleanupStartPromise(); console.log("TCP server listening on port", SERVER_PORT); resolve(SERVER_PORT); }
+          if (!settled) { settled = true; cleanupStartPromise(); resolve(SERVER_PORT); }
         });
       } catch (error) {
         if (!settled) { settled = true; this.server = null; cleanupStartPromise(); reject(error); }
@@ -153,7 +150,6 @@ export class TCPService {
           this.connectedPeerPort = port;
           if (typeof socket.setTimeout === "function") socket.setTimeout(0);
           this.startHeartbeat();
-          console.log("Connected to device at", ip, port);
           this.connectionCallbacks.forEach((cb) => cb(true));
           resolve();
         });
@@ -175,7 +171,6 @@ export class TCPService {
           }
         });
         socket.on("close", () => {
-          console.log("TCP client disconnected");
           if (this.clientSocket === socket) this.clientSocket = null;
           if (this.connectedPeerIp === ip && this.connectedPeerPort === port) { this.connectedPeerIp = null; this.connectedPeerPort = null; }
           if (!this.serverSocket) { this.stopHeartbeat(); this.connectionCallbacks.forEach((cb) => cb(false)); }
