@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useRouter } from "expo-router";
 import { Animated, Dimensions, Modal, Platform, Pressable, ScrollView, Text, TextInput, TouchableOpacity, View } from "react-native";
 import "../../global.css";
 import { useCommunication } from "../context/CommunicationContext";
@@ -14,12 +15,17 @@ const MESSAGE_MAX_WIDTH = SCREEN_WIDTH * 0.85;
 const ANDROID_FONT = Platform.OS === "android" ? "sans-serif" : undefined;
 
 export default function CommunicationScreen() {
-  const { messages, currentDevice, localDeviceId, sendMessage, endCall, startSpeechRecognition, stopSpeechRecognition } = useCommunication();
+  const router = useRouter();
+  const { messages, currentDevice, localDeviceId, callState, sendMessage, endCall, startSpeechRecognition, stopSpeechRecognition } = useCommunication();
   const [isListening, setIsListening] = useState(false);
   const [pressScale] = useState(new Animated.Value(1));
   const [messageText, setMessageText] = useState("");
   const [showTextInput, setShowTextInput] = useState(false);
   const scrollViewRef = useRef<ScrollView>(null);
+
+  useEffect(() => {
+    if (callState !== "connected") router.replace("/");
+  }, [callState, router]);
 
   useEffect(() => { const timer = setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 50); return () => clearTimeout(timer); }, [messages.length]);
   const handleMicPress = async () => { setIsListening(true); Animated.spring(pressScale, { toValue: 0.92, useNativeDriver: true }).start(); try { await startSpeechRecognition(); } catch (error) { console.error("Speech recognition failed:", error); setIsListening(false); } };
@@ -32,12 +38,7 @@ export default function CommunicationScreen() {
       {messages.length === 0 ? <View style={{ paddingHorizontal: 8, paddingTop: 30 }}><Text style={{ fontSize: 15, fontFamily: ANDROID_FONT, color: MUTED }}>No messages yet.</Text><Text style={{ marginTop: 5, fontSize: 13, fontFamily: ANDROID_FONT, color: "#777" }}>Hold the microphone below to speak.</Text></View> : messages.map((item: ChatMessageType, index) => {
         const safeItem: ChatMessageType = { id: typeof item?.id === "string" ? item.id : `message-${index}`, senderId: typeof item?.senderId === "string" ? item.senderId : "unknown", senderName: typeof item?.senderName === "string" ? item.senderName : "Unknown", text: typeof item?.text === "string" ? item.text : String(item?.text ?? ""), timestamp: typeof item?.timestamp === "number" ? item.timestamp : Date.now() };
         const own = safeItem.senderId === localDeviceId;
-        return <View key={safeItem.id} style={{ marginBottom: 14, width: "100%" }}>
-          <View style={{ width: "100%", alignItems: own ? "flex-end" : "flex-start" }}>
-            <Text style={{ marginBottom: 5, fontSize: 10, fontWeight: "700", fontFamily: ANDROID_FONT, color: MUTED, textTransform: "uppercase", letterSpacing: 0.8 }}>{own ? "You" : safeItem.senderName}</Text>
-            <Text style={{ maxWidth: MESSAGE_MAX_WIDTH, backgroundColor: own ? BUBBLE : "#1d1d1d", borderRadius: 22, paddingHorizontal: 16, paddingVertical: 11, borderWidth: 1, borderColor: BORDER, fontSize: 16, fontWeight: "400", fontFamily: ANDROID_FONT, lineHeight: 23, color: FG, includeFontPadding: true }}>{safeItem.text}</Text>
-          </View>
-        </View>;
+        return <View key={safeItem.id} style={{ marginBottom: 14, width: "100%" }}><View style={{ width: "100%", alignItems: own ? "flex-end" : "flex-start" }}><Text style={{ marginBottom: 5, fontSize: 10, fontWeight: "700", fontFamily: ANDROID_FONT, color: MUTED, textTransform: "uppercase", letterSpacing: 0.8 }}>{own ? "You" : safeItem.senderName}</Text><Text style={{ maxWidth: MESSAGE_MAX_WIDTH, backgroundColor: own ? BUBBLE : "#1d1d1d", borderRadius: 22, paddingHorizontal: 16, paddingVertical: 11, borderWidth: 1, borderColor: BORDER, fontSize: 16, fontWeight: "400", fontFamily: ANDROID_FONT, lineHeight: 23, color: FG, includeFontPadding: true }}>{safeItem.text}</Text></View></View>;
       })}
     </ScrollView>
     <View style={{ borderTopWidth: 1, borderTopColor: BORDER, paddingHorizontal: 20, paddingTop: 15, paddingBottom: 28 }}><View style={{ alignItems: "center" }}><Pressable onPressIn={handleMicPress} onPressOut={handleMicRelease}><Animated.View style={{ width: 68, height: 68, borderRadius: 34, backgroundColor: FG, alignItems: "center", justifyContent: "center", transform: [{ scale: pressScale }] }}><View style={{ width: 17, height: 27, borderWidth: 2.5, borderColor: BG, borderRadius: 10 }} /><View style={{ position: "absolute", top: 35, width: 28, height: 15, borderBottomWidth: 2.5, borderLeftWidth: 2.5, borderRightWidth: 2.5, borderColor: BG, borderBottomLeftRadius: 14, borderBottomRightRadius: 14 }} /><View style={{ position: "absolute", top: 49, width: 3, height: 6, backgroundColor: BG, borderRadius: 2 }} /><View style={{ position: "absolute", top: 55, width: 15, height: 2.5, backgroundColor: BG, borderRadius: 2 }} /></Animated.View></Pressable><Text style={{ marginTop: 9, fontSize: 12, fontWeight: "600", fontFamily: ANDROID_FONT, color: MUTED }}>{isListening ? "Listening…" : "Hold to speak"}</Text><TouchableOpacity onPress={() => setShowTextInput(true)} activeOpacity={0.7} style={{ marginTop: 8, borderWidth: 1, borderColor: BORDER, borderRadius: 18, paddingHorizontal: 15, paddingVertical: 7 }}><Text style={{ fontSize: 12, fontWeight: "400", fontFamily: ANDROID_FONT, color: FG }}>Type a message</Text></TouchableOpacity></View></View>
