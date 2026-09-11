@@ -71,14 +71,12 @@ export default function CommunicationScreen() {
           };
           const own = safeItem.senderId === localDeviceId;
           return (
-            <View key={safeItem.id} style={{ marginBottom: 14, alignItems: own ? "flex-end" : "flex-start", width: "100%" }}>
-              <View style={{ width: "100%", maxWidth: "82%", alignItems: own ? "flex-end" : "flex-start" }}>
-                <Text style={{ marginHorizontal: 8, marginBottom: 5, fontSize: 10, fontWeight: "700", color: MUTED, textTransform: "uppercase", letterSpacing: 0.8 }}>{own ? "You" : safeItem.senderName}</Text>
-                <View style={{ alignSelf: own ? "flex-end" : "flex-start", maxWidth: "100%", backgroundColor: own ? BUBBLE : "#1d1d1d", borderRadius: 22, paddingHorizontal: 16, paddingVertical: 11, borderWidth: 1, borderColor: BORDER }}>
-                  <Text style={{ fontSize: 16, lineHeight: 23, color: FG, flexShrink: 1 }}>{safeItem.text}</Text>
-                </View>
-                <Text style={{ marginHorizontal: 8, marginTop: 4, fontSize: 9, color: "#666" }}>{new Date(safeItem.timestamp).toLocaleTimeString()}</Text>
+            <View key={safeItem.id} style={{ marginBottom: 14, width: "100%", alignItems: own ? "flex-end" : "flex-start" }}>
+              <Text style={{ maxWidth: "82%", marginHorizontal: 8, marginBottom: 5, fontSize: 10, fontWeight: "700", color: MUTED, textTransform: "uppercase", letterSpacing: 0.8 }}>{own ? "You" : safeItem.senderName}</Text>
+              <View style={{ maxWidth: "82%", alignSelf: own ? "flex-end" : "flex-start", backgroundColor: own ? BUBBLE : "#1d1d1d", borderRadius: 22, paddingHorizontal: 16, paddingVertical: 11, borderWidth: 1, borderColor: BORDER }}>
+                <Text style={{ fontSize: 16, lineHeight: 23, color: FG, includeFontPadding: true }}>{safeItem.text}</Text>
               </View>
+              <Text style={{ maxWidth: "82%", marginHorizontal: 8, marginTop: 4, fontSize: 9, color: "#666" }}>{new Date(safeItem.timestamp).toLocaleTimeString()}</Text>
             </View>
           );
         })}
