@@ -13,7 +13,9 @@ const TCP_PORT = 5555;
 const SCAN_INTERVAL = 10000;
 const DEVICE_TIMEOUT = 30000;
 const CONNECT_TIMEOUT = 1200;
-const MAX_CONCURRENT_SCANS = 4;
+const MAX_CONCURRENT_SCANS = 2;
+const SCAN_HOST_START = 110;
+const SCAN_HOST_END = 120;
 const DISCOVERY_REQUEST = "ITANTRA_DISCOVER_V1";
 const TCP_PROBE = "ITANTRA_PROBE_V1";
 
@@ -385,7 +387,7 @@ export class DeviceDiscovery {
     const addresses: string[] = [];
 
     for (const prefix of prefixes) {
-      for (let host = 1; host <= 254; host++) {
+      for (let host = SCAN_HOST_START; host <= SCAN_HOST_END; host++) {
         addresses.push(`${prefix}.${host}`);
       }
     }
@@ -405,31 +407,11 @@ export class DeviceDiscovery {
     if (!validIp) return this.getCommonHotspotAddresses();
     if (!validMask) subnet = "255.255.255.0";
 
-    const mask = subnet.split(".").map(Number);
-    const ipNumber =
-      ((ipParts[0] << 24) >>> 0) |
-      (ipParts[1] << 16) |
-      (ipParts[2] << 8) |
-      ipParts[3];
-    const maskNumber =
-      ((mask[0] << 24) >>> 0) | (mask[1] << 16) | (mask[2] << 8) | mask[3];
-
-    const networkNumber = (ipNumber & maskNumber) >>> 0;
-    const broadcastNumber = (networkNumber | (~maskNumber >>> 0)) >>> 0;
-    const start = networkNumber + 1;
-    const end = broadcastNumber - 1;
+    const prefix = ipParts.slice(0, 3).join(".");
     const addresses: string[] = [];
 
-    if (start > end) return addresses;
-
-    for (let value = start; value <= end; value++) {
-      const candidate = [
-        (value >>> 24) & 255,
-        (value >>> 16) & 255,
-        (value >>> 8) & 255,
-        value & 255,
-      ].join(".");
-
+    for (let host = SCAN_HOST_START; host <= SCAN_HOST_END; host++) {
+      const candidate = `${prefix}.${host}`;
       if (candidate !== ip) addresses.push(candidate);
     }
 
