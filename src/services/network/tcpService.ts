@@ -21,6 +21,8 @@ export class TCPService {
   private serverId: string;
   private serverSocket: any = null;
   private clientSocket: any = null;
+  private connectedPeerIp: string | null = null;
+  private connectedPeerPort: number | null = null;
   private messageProtocol = new MessageProtocol();
   private messageCallbacks: Array<(msg: Message) => void> = [];
   private connectionCallbacks: Array<(connected: boolean) => void> = [];
@@ -176,6 +178,8 @@ export class TCPService {
     if (this.clientSocket) {
       this.clientSocket.destroy();
       this.clientSocket = null;
+      this.connectedPeerIp = null;
+      this.connectedPeerPort = null;
     }
     return new Promise((resolve, reject) => {
       let settled = false;
@@ -193,6 +197,8 @@ export class TCPService {
           if (settled) return;
           settled = true;
           this.clientSocket = socket;
+          this.connectedPeerIp = ip;
+          this.connectedPeerPort = port;
           if (typeof socket.setTimeout === "function") socket.setTimeout(0);
           this.startHeartbeat();
           console.log("Connected to device at", ip, port);
@@ -216,12 +222,20 @@ export class TCPService {
           if (!settled) {
             settled = true;
             if (this.clientSocket === socket) this.clientSocket = null;
+            if (this.connectedPeerIp === ip && this.connectedPeerPort === port) {
+              this.connectedPeerIp = null;
+              this.connectedPeerPort = null;
+            }
             reject(err);
           }
         });
         socket.on("close", () => {
           console.log("TCP client disconnected");
           if (this.clientSocket === socket) this.clientSocket = null;
+          if (this.connectedPeerIp === ip && this.connectedPeerPort === port) {
+            this.connectedPeerIp = null;
+            this.connectedPeerPort = null;
+          }
           if (!this.serverSocket) {
             this.stopHeartbeat();
             this.connectionCallbacks.forEach((cb) => cb(false));
@@ -231,6 +245,8 @@ export class TCPService {
         if (!settled) {
           settled = true;
           this.clientSocket = null;
+          this.connectedPeerIp = null;
+          this.connectedPeerPort = null;
           reject(error);
         }
       }
@@ -261,6 +277,9 @@ export class TCPService {
   isConnected(): boolean {
     return !!this.getActiveSocket();
   }
+  isConnectedTo(ip: string, port: number = SERVER_PORT): boolean {
+    return this.isConnected() && this.connectedPeerIp === ip && this.connectedPeerPort === port;
+  }
 
   async disconnect(): Promise<void> {
     this.stopHeartbeat();
@@ -268,6 +287,8 @@ export class TCPService {
       this.clientSocket.destroy();
       this.clientSocket = null;
     }
+    this.connectedPeerIp = null;
+    this.connectedPeerPort = null;
     if (this.serverSocket) {
       this.serverSocket.destroy();
       this.serverSocket = null;
