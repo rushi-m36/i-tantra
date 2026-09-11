@@ -51,6 +51,8 @@ export default function AvailableDevicesScreen() {
     );
   }
 
+  const discoveryText = scanStatus.phase === "nsd" ? "Finding devices via NSD" : scanStatus.phase === "nsd-found" ? "Device found via NSD" : scanStatus.phase === "tcp" ? "NSD not found — scanning via TCP" : devices.length > 0 ? `${devices.length} device${devices.length === 1 ? "" : "s"} found on this network` : "Waiting for discovery";
+
   return (
     <View style={{ flex: 1, backgroundColor: "#080808", paddingHorizontal: 24, paddingTop: 64 }}>
       <View style={{ marginBottom: 24, flexDirection: "row", alignItems: "flex-end", justifyContent: "space-between" }}>
@@ -64,20 +66,12 @@ export default function AvailableDevicesScreen() {
       </View>
 
       <View style={{ marginBottom: 20, borderTopWidth: 1, borderBottomWidth: 1, borderColor: "#333", paddingVertical: 16 }}>
-        {scanStatus.scanning ? (
-          <View>
-            <View style={{ flexDirection: "row", alignItems: "center" }}>
-              <ActivityIndicator size="small" color="#fff" />
-              <Text style={{ marginLeft: 12, fontWeight: "600", color: "#fff" }}>Scanning local network</Text>
-            </View>
-            {scanStatus.currentIp && <Text style={{ marginTop: 8, fontSize: 12, color: "#888" }}>{scanStatus.currentIp}</Text>}
-            {scanStatus.total > 0 && <Text style={{ marginTop: 4, fontSize: 12, color: "#888" }}>{scanStatus.scanned} / {scanStatus.total} checked, {scanStatus.found} found</Text>}
-          </View>
-        ) : devices.length > 0 ? (
-          <Text style={{ fontWeight: "600", color: "#fff" }}>{devices.length} device{devices.length === 1 ? "" : "s"} found on this network</Text>
-        ) : (
-          <Text style={{ color: "#888" }}>No iTantra devices found on this network</Text>
-        )}
+        <View style={{ flexDirection: "row", alignItems: "center" }}>
+          {(scanStatus.phase === "nsd" || scanStatus.phase === "tcp") && <ActivityIndicator size="small" color="#fff" />}
+          <Text style={{ marginLeft: scanStatus.phase === "nsd" || scanStatus.phase === "tcp" ? 12 : 0, fontWeight: "600", color: "#fff" }}>{discoveryText}</Text>
+        </View>
+        {scanStatus.phase === "tcp" && scanStatus.total > 0 && <Text style={{ marginTop: 8, fontSize: 12, color: "#888" }}>{scanStatus.scanned} / {scanStatus.total} addresses checked{scanStatus.currentIp ? ` · ${scanStatus.currentIp}` : ""}</Text>}
+        {scanStatus.phase === "tcp" && <Text style={{ marginTop: 4, fontSize: 12, color: "#666" }}>2 concurrent TCP probes</Text>}
       </View>
 
       <FlatList data={devices} keyExtractor={(item) => item.id} renderItem={({ item }) => <DeviceCard device={item} onCall={() => void handleCall(item)} isLoading={loading && currentDevice?.id === item.id} />} showsVerticalScrollIndicator={false} />
