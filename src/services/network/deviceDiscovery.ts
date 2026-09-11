@@ -9,11 +9,10 @@ const TCP_PORT = 5555;
 const SCAN_INTERVAL = 5000;
 const DEVICE_TIMEOUT = 12000;
 const CONNECT_TIMEOUT = 3500;
-// Temporary diagnostic settings: scan only .100-.130 and keep concurrency low.
-// Restore the full-subnet scan and higher concurrency after hotspot discovery works.
+// Temporary diagnostic settings: scan only .110-.120 and keep concurrency low.
 const MAX_CONCURRENT_SCANS = 4;
-const DIAGNOSTIC_SCAN_START = 100;
-const DIAGNOSTIC_SCAN_END = 130;
+const DIAGNOSTIC_SCAN_START = 110;
+const DIAGNOSTIC_SCAN_END = 120;
 const DISCOVERY_REQUEST = "ITANTRA_DISCOVER_V1";
 const TCP_PROBE = "ITANTRA_PROBE_V1";
 
@@ -70,9 +69,7 @@ export class DeviceDiscovery {
         if (LocalNetwork?.getLocalIPv4Addresses) {
           nativeIps = (await LocalNetwork.getLocalIPv4Addresses()).filter((value) => this.isValidIpv4(value));
         }
-      } catch (error) {
-        console.log("Native local IPv4 lookup failed:", error);
-      }
+      } catch (error) { console.log("Native local IPv4 lookup failed:", error); }
 
       let deviceInfoIp: string | null = null;
       try {
@@ -80,10 +77,7 @@ export class DeviceDiscovery {
         if (this.isValidIpv4(value)) deviceInfoIp = value;
       } catch {}
 
-      const netInfoIp = typeof details?.ipAddress === "string" && this.isValidIpv4(details.ipAddress)
-        ? details.ipAddress
-        : null;
-
+      const netInfoIp = typeof details?.ipAddress === "string" && this.isValidIpv4(details.ipAddress) ? details.ipAddress : null;
       const privateIps = [...nativeIps, deviceInfoIp, netInfoIp]
         .filter((value): value is string => !!value)
         .filter((value, index, values) => values.indexOf(value) === index)
@@ -97,7 +91,6 @@ export class DeviceDiscovery {
       const ip = privateIps[0];
       let subnet = typeof details?.subnet === "string" ? details.subnet : "";
       if (!this.isUsableSubnet(subnet)) subnet = "255.255.255.0";
-
       console.log(`Network available: ${state.type}, IP ${ip}, subnet ${subnet}`);
       console.log(`[DISCOVERY NETWORK] Android IPv4 interfaces: ${privateIps.join(", ")}`);
       return { ip, subnet, isWifi: state.type === "wifi" || this.isPrivateIpv4(ip), fallback: false };
@@ -110,10 +103,7 @@ export class DeviceDiscovery {
 
   private isValidIpv4(ip: string | null | undefined): ip is string {
     if (!ip || !/^(?:\d{1,3}\.){3}\d{1,3}$/.test(ip) || ip === "0.0.0.0") return false;
-    return ip.split(".").every((part) => {
-      const value = Number(part);
-      return Number.isInteger(value) && value >= 0 && value <= 255;
-    });
+    return ip.split(".").every((part) => { const value = Number(part); return Number.isInteger(value) && value >= 0 && value <= 255; });
   }
 
   private isUsableSubnet(subnet: string): boolean {
@@ -178,15 +168,9 @@ export class DeviceDiscovery {
         });
         socket.on("error", () => socket.destroy());
       });
-      this.discoveryServer.on("error", (error: any) => {
-        console.error("Device discovery server error:", error);
-        this.discoveryServer = null;
-      });
+      this.discoveryServer.on("error", (error: any) => { console.error("Device discovery server error:", error); this.discoveryServer = null; });
       this.discoveryServer.listen({ port: DISCOVERY_PORT, host: "0.0.0.0", reuseAddress: true }, () => console.log("Device discovery listening on port", DISCOVERY_PORT));
-    } catch (error) {
-      console.error("Failed to start device discovery:", error);
-      this.discoveryServer = null;
-    }
+    } catch (error) { console.error("Failed to start device discovery:", error); this.discoveryServer = null; }
   }
 
   private async scanLocalNetwork(): Promise<void> {
@@ -200,10 +184,7 @@ export class DeviceDiscovery {
         return;
       }
 
-      const addresses = network.fallback
-        ? this.getCommonHotspotAddresses()
-        : this.getSubnetAddresses(network.ip, network.subnet);
-
+      const addresses = network.fallback ? this.getCommonHotspotAddresses() : this.getSubnetAddresses(network.ip, network.subnet);
       this.scanStatus = { scanning: true, currentIp: null, scanned: 0, total: addresses.length, found: this.discoveredDevices.size };
       this.notifyScanStatus();
       console.log(`[DISCOVERY SCAN] Diagnostic range: .${DIAGNOSTIC_SCAN_START}-.${DIAGNOSTIC_SCAN_END}`);
@@ -223,9 +204,8 @@ export class DeviceDiscovery {
         this.notifyScanStatus();
         console.log(`[DISCOVERY SCAN] Progress: ${Math.min(index + batch.length, addresses.length)}/${addresses.length}, found ${this.discoveredDevices.size}`);
       }
-    } catch (error) {
-      console.error("Local network scan failed:", error);
-    } finally {
+    } catch (error) { console.error("Local network scan failed:", error); }
+    finally {
       this.scanInProgress = false;
       this.scanStatus = { ...this.scanStatus, scanning: false, currentIp: null, found: this.discoveredDevices.size };
       this.notifyScanStatus();
@@ -235,9 +215,7 @@ export class DeviceDiscovery {
   private getCommonHotspotAddresses(): string[] {
     const prefixes = ["192.168.43", "192.168.137", "192.168.42"];
     const addresses: string[] = [];
-    for (const prefix of prefixes) {
-      for (let host = 1; host <= 254; host++) addresses.push(`${prefix}.${host}`);
-    }
+    for (const prefix of prefixes) for (let host = 1; host <= 254; host++) addresses.push(`${prefix}.${host}`);
     return addresses;
   }
 
@@ -257,12 +235,11 @@ export class DeviceDiscovery {
     const start = networkNumber + 1;
     const end = broadcastNumber - 1;
 
-    // Temporary diagnostic scan: only test .100 through .130 on the same /24.
-    // This deliberately includes the laptop at 10.190.147.112.
+    // Temporary diagnostic scan: only test .110 through .120 on the same /24.
     const prefix = ipParts.slice(0, 3).join(".");
-    const diagnosticStart = Math.max(DIAGNOSTIC_SCAN_START, (start >>> 0) & 255);
-    const diagnosticEnd = Math.min(DIAGNOSTIC_SCAN_END, (end >>> 0) & 255);
-    if (prefix === "10.190.147" && diagnosticStart <= diagnosticEnd) {
+    if (prefix === "10.190.147") {
+      const diagnosticStart = Math.max(DIAGNOSTIC_SCAN_START, (start >>> 0) & 255);
+      const diagnosticEnd = Math.min(DIAGNOSTIC_SCAN_END, (end >>> 0) & 255);
       for (let host = diagnosticStart; host <= diagnosticEnd; host++) {
         const candidate = `${prefix}.${host}`;
         if (candidate !== ip) addresses.push(candidate);
@@ -300,6 +277,8 @@ export class DeviceDiscovery {
         if (settled) return;
         settled = true;
         if (timer) clearTimeout(timer);
+        // The probe socket is intentionally closed after the response. It is
+        // separate from the persistent TCP communication connection.
         if (socket && !socket.destroyed) socket.destroy();
         if (diagnosticTarget) console.log(`[DISCOVERY PROBE] ${ip}:${port} -> ${reason}`);
         resolve(found);
@@ -326,7 +305,10 @@ export class DeviceDiscovery {
           if (discoveryPort) finish(false, "invalid response");
         });
         socket.on("error", (error: any) => finish(false, `error ${error?.code || error?.message || "unknown"}`));
-        socket.on("close", () => finish(false, "closed"));
+        // Do not treat close as a new failure after a successful response.
+        socket.on("close", () => {
+          if (!settled) finish(false, "closed");
+        });
       } catch (error: any) { finish(false, `exception ${error?.message || "unknown"}`); }
     });
   }
