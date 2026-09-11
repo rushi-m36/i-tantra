@@ -59,9 +59,13 @@ function handleData(data) {
     buffer = buffer.slice(index + 1);
     if (!line) continue;
 
+    // Discovery probes arrive on the same TCP port as normal communication.
+    // Respond on this temporary socket only; never touch the persistent socket.
     if (line === TCP_PROBE) {
       const response = { magic: TCP_PROBE, id: DEVICE_ID, name: DEFAULT_NAME, port: PORT };
-      if (socket && !socket.destroyed) socket.write(JSON.stringify(response) + '\n', 'utf8', () => socket.destroy());
+      if (currentConnectionSocket && !currentConnectionSocket.destroyed) {
+        currentConnectionSocket.write(JSON.stringify(response) + '\n', 'utf8', () => currentConnectionSocket.destroy());
+      }
       continue;
     }
 
@@ -76,9 +80,28 @@ function handleData(data) {
   if (shouldPrompt) prompt();
 }
 
-function attachSocket(newSocket) {
+let currentConnectionSocket = null;
+
+function attachSocket(newSocket, options = {}) {
+  const persistent = options.persistent !== false;
+
+  // Discovery probes are short-lived and must never replace the persistent
+  // communication connection.
+  if (!persistent) {
+    currentConnectionSocket = newSocket;
+    newSocket.setTimeout(0);
+    newSocket.setEncoding('utf8');
+    newSocket.on('data', handleData);
+    newSocket.on('error', error => console.log(`\nDiscovery socket error: ${error.message}`));
+    newSocket.on('close', () => {
+      if (currentConnectionSocket === newSocket) currentConnectionSocket = null;
+    });
+    return;
+  }
+
   if (socket && socket !== newSocket && !socket.destroyed) socket.destroy();
   socket = newSocket;
+  currentConnectionSocket = newSocket;
   buffer = '';
   connectedPeer = `${newSocket.remoteAddress}:${newSocket.remotePort}`;
   newSocket.setTimeout(0);
@@ -89,6 +112,7 @@ function attachSocket(newSocket) {
   newSocket.on('error', error => console.log(`\nSocket error: ${error.message}`));
   newSocket.on('close', () => {
     if (socket === newSocket) { socket = null; connectedPeer = null; buffer = ''; }
+    if (currentConnectionSocket === newSocket) currentConnectionSocket = null;
     console.log('\nConnection closed.');
     prompt();
   });
@@ -96,7 +120,7 @@ function attachSocket(newSocket) {
 
 function startServer() {
   if (server) { console.log(`TCP server is already listening on ${PORT}.`); return; }
-  server = net.createServer(attachSocket);
+  server = net.createServer(client => attachSocket(client, { persistent: true }));
   server.on('error', error => {
     console.error(`\nServer error: ${error.message}`);
     if (error.code === 'EADDRINUSE') console.error(`Port ${PORT} is already in use.`);
@@ -260,7 +284,7 @@ function connectToPhone(host) {
   if (socket && !socket.destroyed) socket.destroy();
   const client = net.createConnection({ host: target, port: device?.port || PORT, timeout: 10000 }, () => {
     client.setTimeout(0);
-    attachSocket(client);
+    attachSocket(client, { persistent: true });
     console.log(`Connected to ${device?.name || 'device'} at ${target}:${device?.port || PORT}`);
     prompt();
   });
