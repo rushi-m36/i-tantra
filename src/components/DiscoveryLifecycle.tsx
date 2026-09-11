@@ -13,7 +13,7 @@ interface NsdDevice {
 }
 
 export function DiscoveryLifecycle() {
-  const { callState } = useCommunication();
+  const { callState, discoveryRefreshKey } = useCommunication();
 
   useEffect(() => {
     let active = true;
@@ -34,7 +34,9 @@ export function DiscoveryLifecycle() {
       let nsdFoundDevice = false;
       const ownServiceName = `iTantra-${discovery.getDeviceId().slice(-8)}`;
 
+      discovery.stopDiscovery();
       discovery.setDiscoveryPhase("nsd");
+
       nsdSubscription = DeviceEventEmitter.addListener("itantraNsdDeviceFound", (device: NsdDevice) => {
         if (!active || nsdFoundDevice || !device?.host || device.serviceName === ownServiceName) return;
 
@@ -48,7 +50,6 @@ export function DiscoveryLifecycle() {
           lastSeen: Date.now(),
         });
 
-        // NSD succeeded, so the TCP subnet fallback is no longer needed.
         if (fallbackTimer) {
           clearTimeout(fallbackTimer);
           fallbackTimer = null;
@@ -72,9 +73,10 @@ export function DiscoveryLifecycle() {
       active = false;
       if (fallbackTimer) clearTimeout(fallbackTimer);
       nsdSubscription?.remove();
+      void getDeviceDiscovery().then((discovery) => discovery.stopDiscovery()).catch(() => {});
       NativeModules.NsdDiscovery?.stop?.();
     };
-  }, [callState]);
+  }, [callState, discoveryRefreshKey]);
 
   return null;
 }
