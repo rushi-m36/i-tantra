@@ -1,6 +1,6 @@
 import { useRouter } from "expo-router";
 import { useEffect } from "react";
-import { ActivityIndicator, Text, TouchableOpacity, View } from "react-native";
+import { DeviceEventEmitter, Text, TouchableOpacity, View } from "react-native";
 import "../../global.css";
 import { BottomNav } from "../components/BottomNav";
 import { IncomingCallModal } from "../components/IncomingCallModal";
@@ -21,13 +21,14 @@ export default function App() {
   const handleStartScanning = () => {
     if (scanStatus.scanning) return;
     refreshDiscovery();
+    setTimeout(() => DeviceEventEmitter.emit("itantraRefreshDiscovery"), 0);
   };
 
   if (callState === "connected") {
     return <CommunicationScreen />;
   }
 
-  const isScanning = scanStatus.phase === "nsd" || scanStatus.phase === "tcp";
+  const isScanning = scanStatus.phase === "nsd";
 
   return (
     <View style={{ flex: 1, backgroundColor: "#080808" }}>
