@@ -24,16 +24,11 @@ export class SpeechToTextService {
   private singleUseResolve: ((text: string) => void) | null = null;
   private singleUseReject: ((error: Error) => void) | null = null;
 
-  constructor() {
-    console.log("STT Service initialized (native speech recognition)");
-  }
-
   private async resolveAndroidLocale(requestedLocale: string): Promise<string> {
     if (Platform.OS !== "android") return requestedLocale;
     try {
       const supported = await ExpoSpeechRecognitionModule.getSupportedLocales({ androidRecognitionServicePackage: ANDROID_ON_DEVICE_SERVICE });
       const installed = supported.installedLocales ?? [];
-      console.log("Android offline STT locales:", installed.join(", ") || "none");
       if (installed.length === 0) {
         throw new Error("No Android offline speech model is installed. Install an offline speech language in Android System Intelligence / On-device speech recognition settings.");
       }
@@ -48,7 +43,6 @@ export class SpeechToTextService {
       return installed[0];
     } catch (error) {
       if (error instanceof Error && error.message.startsWith("No Android offline")) throw error;
-      console.warn("Could not query Android offline STT locales:", error);
       throw new Error("Android offline speech recognition models could not be queried. Check that Android System Intelligence / On-device speech recognition is enabled.");
     }
   }
