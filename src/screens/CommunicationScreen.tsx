@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Animated, Modal, Pressable, ScrollView, Text, TextInput, TouchableOpacity, View } from "react-native";
+import { Animated, Dimensions, Modal, Pressable, ScrollView, Text, TextInput, TouchableOpacity, View } from "react-native";
 import "../../global.css";
 import { useCommunication } from "../context/CommunicationContext";
 import { ChatMessage as ChatMessageType } from "../types/communication";
@@ -9,7 +9,7 @@ const FG = "#fff";
 const MUTED = "#aaa";
 const BORDER = "#2a2a2a";
 const BUBBLE = "#2b2b2b";
-const BUBBLE_MAX_WIDTH = "82%";
+const SCREEN_WIDTH = Dimensions.get("window").width;
 
 export default function CommunicationScreen() {
   const { messages, currentDevice, localDeviceId, sendMessage, endCall, startSpeechRecognition, stopSpeechRecognition } = useCommunication();
@@ -71,28 +71,28 @@ export default function CommunicationScreen() {
             timestamp: typeof item?.timestamp === "number" ? item.timestamp : Date.now(),
           };
           const own = safeItem.senderId === localDeviceId;
-          console.log("[UI MESSAGE DEBUG]", { id: safeItem.id, text: safeItem.text, length: safeItem.text.length, own });
+
           return (
             <View key={safeItem.id} style={{ marginBottom: 14, width: "100%" }}>
               <View style={{ width: "100%", alignItems: own ? "flex-end" : "flex-start" }}>
                 <Text style={{ marginBottom: 5, fontSize: 10, fontWeight: "700", color: MUTED, textTransform: "uppercase", letterSpacing: 0.8 }}>{own ? "You" : safeItem.senderName}</Text>
-                <View style={{
-                  alignSelf: own ? "flex-end" : "flex-start",
-                  maxWidth: BUBBLE_MAX_WIDTH,
-                  backgroundColor: own ? BUBBLE : "#1d1d1d",
-                  borderRadius: 22,
-                  paddingHorizontal: 16,
-                  paddingVertical: 11,
-                  borderWidth: 1,
-                  borderColor: BORDER,
-                }}>
+                <View
+                  onLayout={(event) => {
+                    const { width, height } = event.nativeEvent.layout;
+                    console.log("[RENDER DEBUG] bubble", { id: safeItem.id, text: safeItem.text, textLength: safeItem.text.length, bubbleWidth: Math.round(width * 100) / 100, bubbleHeight: Math.round(height * 100) / 100, screenWidth: SCREEN_WIDTH });
+                  }}
+                  style={{ alignSelf: own ? "flex-end" : "flex-start", maxWidth: SCREEN_WIDTH * 0.82, backgroundColor: own ? BUBBLE : "#1d1d1d", borderRadius: 22, paddingHorizontal: 16, paddingVertical: 11, borderWidth: 1, borderColor: BORDER }}
+                >
                   <Text
-                    style={{ fontSize: 16, lineHeight: 23, color: FG, includeFontPadding: true, flexShrink: 1 }}
+                    style={{ fontSize: 16, lineHeight: 23, color: FG }}
+                    onLayout={(event) => {
+                      const { width, height } = event.nativeEvent.layout;
+                      console.log("[RENDER DEBUG] text", { id: safeItem.id, text: safeItem.text, textLength: safeItem.text.length, textWidth: Math.round(width * 100) / 100, textHeight: Math.round(height * 100) / 100 });
+                    }}
                   >
                     {safeItem.text}
                   </Text>
                 </View>
-                <Text style={{ marginTop: 4, fontSize: 9, color: "#666" }}>{new Date(safeItem.timestamp).toLocaleTimeString()}</Text>
               </View>
             </View>
           );
@@ -122,12 +122,8 @@ export default function CommunicationScreen() {
             <Text style={{ fontSize: 20, fontWeight: "700", color: FG }}>Message</Text>
             <TextInput autoFocus placeholder="Type your message" value={messageText} onChangeText={setMessageText} multiline placeholderTextColor="#777" style={{ marginTop: 16, minHeight: 100, borderWidth: 1, borderColor: BORDER, borderRadius: 18, padding: 14, color: FG, textAlignVertical: "top" }} />
             <View style={{ marginTop: 16, flexDirection: "row", gap: 10 }}>
-              <TouchableOpacity onPress={() => setShowTextInput(false)} activeOpacity={0.8} style={{ flex: 1, borderWidth: 1, borderColor: FG, borderRadius: 18, paddingVertical: 12 }}>
-                <Text style={{ textAlign: "center", fontWeight: "600", color: FG }}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity onPress={handleSendMessage} disabled={!messageText.trim()} activeOpacity={0.8} style={{ flex: 1, borderRadius: 18, backgroundColor: messageText.trim() ? FG : "#333", paddingVertical: 12 }}>
-                <Text style={{ textAlign: "center", fontWeight: "700", color: BG }}>Send</Text>
-              </TouchableOpacity>
+              <TouchableOpacity onPress={() => setShowTextInput(false)} activeOpacity={0.8} style={{ flex: 1, borderWidth: 1, borderColor: FG, borderRadius: 18, paddingVertical: 12 }}><Text style={{ textAlign: "center", fontWeight: "600", color: FG }}>Cancel</Text></TouchableOpacity>
+              <TouchableOpacity onPress={handleSendMessage} disabled={!messageText.trim()} activeOpacity={0.8} style={{ flex: 1, borderRadius: 18, backgroundColor: messageText.trim() ? FG : "#333", paddingVertical: 12 }}><Text style={{ textAlign: "center", fontWeight: "700", color: BG }}>Send</Text></TouchableOpacity>
             </View>
           </View>
         </View>
