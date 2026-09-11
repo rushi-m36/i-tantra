@@ -70,12 +70,35 @@ export default function CommunicationScreen() {
             timestamp: typeof item?.timestamp === "number" ? item.timestamp : Date.now(),
           };
           const own = safeItem.senderId === localDeviceId;
+          console.log("[UI MESSAGE DEBUG]", { text: safeItem.text, length: safeItem.text.length, id: safeItem.id, own });
           return (
             <View key={safeItem.id} style={{ marginBottom: 14, width: "100%" }}>
               <View style={{ width: "100%", alignItems: own ? "flex-end" : "flex-start" }}>
                 <Text style={{ marginBottom: 5, fontSize: 10, fontWeight: "700", color: MUTED, textTransform: "uppercase", letterSpacing: 0.8 }}>{own ? "You" : safeItem.senderName}</Text>
-                <View style={{ alignSelf: own ? "flex-end" : "flex-start", maxWidth: "82%", backgroundColor: own ? BUBBLE : "#1d1d1d", borderRadius: 22, paddingHorizontal: 16, paddingVertical: 11, borderWidth: 1, borderColor: BORDER }}>
-                  <Text style={{ fontSize: 16, lineHeight: 23, color: FG, includeFontPadding: true, flexShrink: 1 }}>{safeItem.text}</Text>
+                <View style={{
+                  alignSelf: own ? "flex-end" : "flex-start",
+                  maxWidth: "82%",
+                  backgroundColor: own ? BUBBLE : "#1d1d1d",
+                  borderRadius: 22,
+                  paddingHorizontal: 16,
+                  paddingVertical: 11,
+                  borderWidth: 1,
+                  borderColor: BORDER,
+                  flexShrink: 1,
+                }}>
+                  <Text
+                    style={{
+                      fontSize: 16,
+                      lineHeight: 23,
+                      color: FG,
+                      includeFontPadding: true,
+                      flexShrink: 0,
+                    }}
+                    numberOfLines={0}
+                    ellipsizeMode="clip"
+                  >
+                    {safeItem.text}
+                  </Text>
                 </View>
                 <Text style={{ marginTop: 4, fontSize: 9, color: "#666" }}>{new Date(safeItem.timestamp).toLocaleTimeString()}</Text>
               </View>
