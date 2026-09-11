@@ -14,12 +14,10 @@ export class TextToSpeechService {
   private async initialize(): Promise<void> {
     try {
       const voices = await Speech.getAvailableVoicesAsync();
-      console.log("TTS initialized. Available voices:", voices.length);
-
       const englishVoices = voices.filter((voice) =>
         voice.language?.toLowerCase().startsWith("en"),
       );
-      console.log("English TTS voices:", englishVoices.length);
+      void englishVoices;
     } catch (e) {
       console.error("TTS initialization error:", e);
     }
@@ -41,8 +39,6 @@ export class TextToSpeechService {
         this.isSpeaking = false;
       }
 
-      console.log("TTS speaking:", trimmed);
-
       this.isSpeaking = true;
       this.onStartCallbacks.forEach((cb) => cb());
 
@@ -52,16 +48,12 @@ export class TextToSpeechService {
         language: "en-US",
         pitch: 1.0,
         rate: 0.9,
-        onStart: () => {
-          console.log("TTS playback started");
-        },
+        onStart: () => {},
         onDone: () => {
-          console.log("TTS playback finished");
           this.isSpeaking = false;
           this.onFinishCallbacks.forEach((cb) => cb());
         },
         onStopped: () => {
-          console.log("TTS playback stopped");
           this.isSpeaking = false;
         },
         onError: (error: any) => {
