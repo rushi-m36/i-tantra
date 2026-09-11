@@ -23,51 +23,48 @@ export function DiscoveryLifecycle() {
     void getDeviceDiscovery().then((discovery) => {
       if (!active) return;
 
-      if (
-        callState === "calling" ||
-        callState === "incoming" ||
-        callState === "connected"
-      ) {
+      const inCall = callState === "calling" || callState === "incoming" || callState === "connected";
+      if (inCall) {
         discovery.stopDiscovery();
         NativeModules.NsdDiscovery?.stop?.();
         return;
       }
-
       if (callState !== "idle") return;
 
-      const ownServiceName = `iTantra-${discovery.getDeviceId().slice(-8)}`;
       let nsdFoundDevice = false;
+      const ownServiceName = `iTantra-${discovery.getDeviceId().slice(-8)}`;
 
-      nsdSubscription = DeviceEventEmitter.addListener(
-        "itantraNsdDeviceFound",
-        (device: NsdDevice) => {
-          if (!active || nsdFoundDevice) return;
-          if (!device?.host || device.serviceName === ownServiceName) return;
+      discovery.setDiscoveryPhase("nsd");
+      nsdSubscription = DeviceEventEmitter.addListener("itantraNsdDeviceFound", (device: NsdDevice) => {
+        if (!active || nsdFoundDevice || !device?.host || device.serviceName === ownServiceName) return;
 
-          nsdFoundDevice = true;
-          discovery.addDevice({
-            id: device.serviceName,
-            name: device.serviceName.replace(/^iTantra-/, "iTantra"),
-            ip: device.host,
-            port: device.port || TCP_PORT,
-            status: "available",
-            lastSeen: Date.now(),
-          });
-        },
-      );
+        nsdFoundDevice = true;
+        discovery.addDevice({
+          id: device.serviceName,
+          name: device.serviceName.replace(/^iTantra-/, "iTantra-"),
+          ip: device.host,
+          port: device.port || TCP_PORT,
+          status: "available",
+          lastSeen: Date.now(),
+        });
+
+        // NSD succeeded, so the TCP subnet fallback is no longer needed.
+        if (fallbackTimer) {
+          clearTimeout(fallbackTimer);
+          fallbackTimer = null;
+        }
+        discovery.stopDiscovery();
+        discovery.setDiscoveryPhase("nsd-found");
+      });
 
       try {
-        NativeModules.NsdDiscovery?.start?.(
-          discovery.getDeviceId(),
-          discovery.getDeviceName(),
-          TCP_PORT,
-        );
+        NativeModules.NsdDiscovery?.start?.(discovery.getDeviceId(), discovery.getDeviceName(), TCP_PORT);
       } catch {}
 
-      // NSD is the primary discovery path. Only start the low-rate TCP scan
-      // if NSD has not found a peer shortly after discovery starts.
       fallbackTimer = setTimeout(() => {
-        if (active && !nsdFoundDevice) discovery.startDiscovery();
+        if (!active || nsdFoundDevice) return;
+        discovery.setDiscoveryPhase("tcp");
+        discovery.startDiscovery();
       }, NSD_FALLBACK_DELAY);
     });
 
