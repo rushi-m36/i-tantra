@@ -84,32 +84,57 @@ export class TCPService {
         try {
           server = TcpSocket.createServer((socket: any) => {
             console.log("TCP client connected:", socket.address());
-            this.serverSocket = socket;
             if (typeof socket.setTimeout === "function") socket.setTimeout(0);
-            this.startHeartbeat();
-            this.connectionCallbacks.forEach((cb) => cb(true));
 
+            // A discovery probe is a temporary connection on the same port as
+            // communication. Do not store it as serverSocket and never let it
+            // replace an existing persistent communication connection.
+            let isFirstData = true;
+            let probeBuffer = "";
+            let connectionActivated = false;
             let buffer = "";
+
+            const activateCommunicationSocket = () => {
+              if (connectionActivated) return;
+              connectionActivated = true;
+              this.serverSocket = socket;
+              this.startHeartbeat();
+              this.connectionCallbacks.forEach((cb) => cb(true));
+            };
+
             socket.on("data", (data: any) => {
               try {
                 const dataStr = decodeTcpData(data);
-                buffer += dataStr;
-                if (buffer.includes("\n")) {
-                  const firstLine = buffer.split("\n")[0].trim();
-                  if (firstLine === TCP_PROBE) {
-                    socket.write(
-                      JSON.stringify({
-                        magic: TCP_PROBE,
-                        id: this.serverId,
-                        name: this.serverId,
-                        port: SERVER_PORT,
-                      }) + "\n",
-                      "utf-8",
-                    );
-                    buffer = buffer.substring(buffer.indexOf("\n") + 1);
+
+                if (isFirstData) {
+                  probeBuffer += dataStr;
+                  const newlineIndex = probeBuffer.indexOf("\n");
+                  if (newlineIndex !== -1) {
+                    const firstLine = probeBuffer.slice(0, newlineIndex).trim();
+                    if (firstLine === TCP_PROBE) {
+                      socket.write(
+                        JSON.stringify({
+                          magic: TCP_PROBE,
+                          id: this.serverId,
+                          name: this.serverId,
+                          port: SERVER_PORT,
+                        }) + "\n",
+                        "utf-8",
+                        () => socket.destroy(),
+                      );
+                      console.log("TCP discovery probe answered without replacing persistent connection");
+                      return;
+                    }
+                    isFirstData = false;
+                    probeBuffer = "";
+                    activateCommunicationSocket();
+                  } else {
                     return;
                   }
                 }
+
+                if (!connectionActivated) return;
+                buffer += dataStr;
                 const { messages } = this.messageProtocol.processData(dataStr);
                 messages.forEach((msg) =>
                   this.messageCallbacks.forEach((cb) => cb(msg)),
@@ -118,13 +143,14 @@ export class TCPService {
                 console.error("Failed to process TCP data:", error);
               }
             });
+
             socket.on("error", (err: any) =>
               console.error("TCP server socket error:", err),
             );
             socket.on("close", () => {
               console.log("TCP client disconnected");
               if (this.serverSocket === socket) this.serverSocket = null;
-              if (!this.clientSocket) {
+              if (connectionActivated && !this.clientSocket) {
                 this.stopHeartbeat();
                 this.connectionCallbacks.forEach((cb) => cb(false));
               }
