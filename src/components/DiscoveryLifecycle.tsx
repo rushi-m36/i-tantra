@@ -24,10 +24,18 @@ export function DiscoveryLifecycle() {
       const discovery = await getDeviceDiscovery();
       if (!active || callState !== "idle") return;
 
+      if (fallbackTimer) {
+        clearTimeout(fallbackTimer);
+        fallbackTimer = null;
+      }
+      nsdSubscription?.remove();
+      nsdSubscription = null;
+      NativeModules.NsdDiscovery?.stop?.();
+      discovery.stopDiscovery();
+
       let nsdFoundDevice = false;
       const ownServiceName = `iTantra-${discovery.getDeviceId().slice(-8)}`;
 
-      discovery.stopDiscovery();
       discovery.setDiscoveryPhase("nsd");
 
       try {
