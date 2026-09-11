@@ -19,7 +19,7 @@ export default function App() {
   }, [callState, router]);
 
   const handleStartScanning = () => {
-    if (scanStatus.scanning) return;
+    if (scanStatus.scanning || callState !== "idle") return;
     refreshDiscovery();
     setTimeout(() => DeviceEventEmitter.emit("itantraRefreshDiscovery"), 0);
   };
@@ -29,12 +29,13 @@ export default function App() {
   }
 
   const isScanning = scanStatus.phase === "nsd";
+  const showStartButton = callState === "idle" && scanStatus.phase === "idle";
 
   return (
     <View style={{ flex: 1, backgroundColor: "#080808" }}>
       <View style={{ flex: 1 }}>
         <AvailableDevicesScreen />
-        {!isScanning && scanStatus.phase === "idle" && (
+        {showStartButton && (
           <View style={{ paddingHorizontal: 24, paddingBottom: 12 }}>
             <TouchableOpacity
               onPress={handleStartScanning}
