@@ -10,7 +10,6 @@ const MUTED = "#aaa";
 const BORDER = "#2a2a2a";
 const BUBBLE = "#2b2b2b";
 const BUBBLE_MAX_WIDTH = "82%";
-const BUBBLE_HORIZONTAL_PADDING = 32;
 
 export default function CommunicationScreen() {
   const { messages, currentDevice, localDeviceId, sendMessage, endCall, startSpeechRecognition, stopSpeechRecognition } = useCommunication();
@@ -18,7 +17,6 @@ export default function CommunicationScreen() {
   const [pressScale] = useState(new Animated.Value(1));
   const [messageText, setMessageText] = useState("");
   const [showTextInput, setShowTextInput] = useState(false);
-  const [bubbleWidths, setBubbleWidths] = useState<Record<string, number>>({});
   const scrollViewRef = useRef<ScrollView>(null);
 
   useEffect(() => {
@@ -73,10 +71,7 @@ export default function CommunicationScreen() {
             timestamp: typeof item?.timestamp === "number" ? item.timestamp : Date.now(),
           };
           const own = safeItem.senderId === localDeviceId;
-          const measuredWidth = bubbleWidths[safeItem.id];
-          const maxWidth = 0.82 * 360;
-          const bubbleWidth = measuredWidth ? Math.min(measuredWidth + BUBBLE_HORIZONTAL_PADDING, maxWidth) : undefined;
-          console.log("[UI MESSAGE DEBUG]", { id: safeItem.id, text: safeItem.text, length: safeItem.text.length, own, measuredWidth, bubbleWidth });
+          console.log("[UI MESSAGE DEBUG]", { id: safeItem.id, text: safeItem.text, length: safeItem.text.length, own });
           return (
             <View key={safeItem.id} style={{ marginBottom: 14, width: "100%" }}>
               <View style={{ width: "100%", alignItems: own ? "flex-end" : "flex-start" }}>
@@ -84,7 +79,6 @@ export default function CommunicationScreen() {
                 <View style={{
                   alignSelf: own ? "flex-end" : "flex-start",
                   maxWidth: BUBBLE_MAX_WIDTH,
-                  width: bubbleWidth,
                   backgroundColor: own ? BUBBLE : "#1d1d1d",
                   borderRadius: 22,
                   paddingHorizontal: 16,
@@ -93,18 +87,7 @@ export default function CommunicationScreen() {
                   borderColor: BORDER,
                 }}>
                   <Text
-                    style={{ fontSize: 16, lineHeight: 23, color: FG, includeFontPadding: true }}
-                    numberOfLines={0}
-                    ellipsizeMode="clip"
-                    onTextLayout={(event) => {
-                      const lineWidths = event.nativeEvent.lines.map((line) => line.width);
-                      const contentWidth = Math.max(0, ...lineWidths);
-                      const nextWidth = Math.ceil(contentWidth);
-                      console.log("[TEXT LAYOUT DEBUG]", { id: safeItem.id, text: safeItem.text, length: safeItem.text.length, lineWidths, contentWidth: nextWidth });
-                      if (nextWidth > 0 && bubbleWidths[safeItem.id] !== nextWidth) {
-                        setBubbleWidths((prev) => prev[safeItem.id] === nextWidth ? prev : { ...prev, [safeItem.id]: nextWidth });
-                      }
-                    }}
+                    style={{ fontSize: 16, lineHeight: 23, color: FG, includeFontPadding: true, flexShrink: 1 }}
                   >
                     {safeItem.text}
                   </Text>
