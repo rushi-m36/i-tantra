@@ -1,6 +1,6 @@
 import { useRouter } from "expo-router";
 import { useEffect } from "react";
-import { View } from "react-native";
+import { ActivityIndicator, Text, TouchableOpacity, View } from "react-native";
 import "../../global.css";
 import { BottomNav } from "../components/BottomNav";
 import { IncomingCallModal } from "../components/IncomingCallModal";
@@ -10,7 +10,7 @@ import CommunicationScreen from "../screens/CommunicationScreen";
 
 export default function App() {
   const router = useRouter();
-  const { callState } = useCommunication();
+  const { callState, scanStatus, refreshDiscovery } = useCommunication();
 
   useEffect(() => {
     if (callState === "connected") {
@@ -18,14 +18,32 @@ export default function App() {
     }
   }, [callState, router]);
 
+  const handleStartScanning = () => {
+    if (scanStatus.scanning) return;
+    refreshDiscovery();
+  };
+
   if (callState === "connected") {
     return <CommunicationScreen />;
   }
+
+  const isScanning = scanStatus.phase === "nsd" || scanStatus.phase === "tcp";
 
   return (
     <View style={{ flex: 1, backgroundColor: "#080808" }}>
       <View style={{ flex: 1 }}>
         <AvailableDevicesScreen />
+        {!isScanning && scanStatus.phase === "idle" && (
+          <View style={{ paddingHorizontal: 24, paddingBottom: 12 }}>
+            <TouchableOpacity
+              onPress={handleStartScanning}
+              activeOpacity={0.8}
+              style={{ height: 48, alignItems: "center", justifyContent: "center", borderRadius: 12, backgroundColor: "#fff" }}
+            >
+              <Text style={{ fontSize: 14, fontWeight: "600", color: "#000" }}>Start scanning for nearby devices</Text>
+            </TouchableOpacity>
+          </View>
+        )}
       </View>
       <BottomNav />
       <IncomingCallModal />
