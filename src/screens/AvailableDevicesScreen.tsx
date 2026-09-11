@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { ActivityIndicator, Alert, FlatList, Modal, Text, TextInput, TouchableOpacity, View } from "react-native";
+import { ActivityIndicator, Alert, DeviceEventEmitter, FlatList, Modal, Text, TextInput, TouchableOpacity, View } from "react-native";
 import "../../global.css";
 import { useCommunication } from "../context/CommunicationContext";
 import { Device } from "../types/communication";
@@ -22,7 +22,7 @@ function DeviceCard({ device, onCall, isLoading }: { device: Device; onCall: () 
 }
 
 export default function AvailableDevicesScreen() {
-  const { devices, scanStatus, callDevice, callState, currentDevice } = useCommunication();
+  const { devices, scanStatus, callDevice, cancelCall, callState, currentDevice, refreshDiscovery } = useCommunication();
   const [loading, setLoading] = useState(false);
   const [showAddDevice, setShowAddDevice] = useState(false);
   const [deviceIp, setDeviceIp] = useState("");
@@ -31,6 +31,17 @@ export default function AvailableDevicesScreen() {
   const handleCall = async (device: Device) => {
     setLoading(true);
     try { await callDevice(device); } catch (error) { Alert.alert("Call Failed", String(error)); } finally { setLoading(false); }
+  };
+
+  const handleCancelCall = async () => {
+    setLoading(false);
+    await cancelCall();
+  };
+
+  const handleRefresh = () => {
+    if (scanStatus.scanning) return;
+    refreshDiscovery();
+    DeviceEventEmitter.emit("itantraRefreshDiscovery");
   };
 
   const handleAddDevice = () => {
@@ -44,9 +55,18 @@ export default function AvailableDevicesScreen() {
   if (callState !== "idle" && callState !== "incoming") {
     return (
       <View style={{ flex: 1, backgroundColor: "#080808", paddingHorizontal: 24, paddingTop: 64 }}>
-        <Text style={{ fontSize: 11, fontWeight: "600", letterSpacing: 2, color: "#aaa", textTransform: "uppercase" }}>{callState === "calling" ? "Calling" : "Connecting"}</Text>
-        <Text style={{ marginTop: 12, fontSize: 30, fontWeight: "700", color: "#fff" }}>{currentDevice?.name || "Device"}</Text>
-        <Text style={{ marginTop: 8, color: "#888" }}>Please wait...</Text>
+        <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+          <View style={{ flex: 1 }}>
+            <Text style={{ fontSize: 11, fontWeight: "600", letterSpacing: 2, color: "#aaa", textTransform: "uppercase" }}>{callState === "calling" ? "Calling" : "Connecting"}</Text>
+            <Text style={{ marginTop: 12, fontSize: 30, fontWeight: "700", color: "#fff" }}>{currentDevice?.name || "Device"}</Text>
+            <Text style={{ marginTop: 8, color: "#888" }}>Please wait...</Text>
+          </View>
+          {callState === "calling" && (
+            <TouchableOpacity onPress={() => void handleCancelCall()} activeOpacity={0.8} accessibilityLabel="Cancel call" style={{ width: 48, height: 48, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: "#555", borderRadius: 24 }}>
+              <Text style={{ fontSize: 26, lineHeight: 28, color: "#fff" }}>×</Text>
+            </TouchableOpacity>
+          )}
+        </View>
       </View>
     );
   }
@@ -60,9 +80,14 @@ export default function AvailableDevicesScreen() {
           <Text style={{ fontSize: 11, fontWeight: "600", letterSpacing: 2, color: "#aaa", textTransform: "uppercase" }}>iTantra</Text>
           <Text style={{ marginTop: 8, fontSize: 30, fontWeight: "700", color: "#fff" }}>Devices</Text>
         </View>
-        <TouchableOpacity onPress={() => setShowAddDevice(true)} activeOpacity={0.8} style={{ borderWidth: 1, borderColor: "#fff", borderRadius: 20, paddingHorizontal: 16, paddingVertical: 9 }}>
-          <Text style={{ fontWeight: "600", color: "#fff" }}>Add device</Text>
-        </TouchableOpacity>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+          <TouchableOpacity onPress={handleRefresh} disabled={scanStatus.scanning} activeOpacity={0.8} accessibilityLabel="Refresh device discovery" style={{ width: 42, height: 42, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: "#555", borderRadius: 21, opacity: scanStatus.scanning ? 0.45 : 1 }}>
+            {scanStatus.scanning ? <ActivityIndicator size="small" color="#fff" /> : <Text style={{ fontSize: 22, color: "#fff" }}>↻</Text>}
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => setShowAddDevice(true)} activeOpacity={0.8} style={{ borderWidth: 1, borderColor: "#fff", borderRadius: 20, paddingHorizontal: 16, paddingVertical: 9 }}>
+            <Text style={{ fontWeight: "600", color: "#fff" }}>Add device</Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
       <View style={{ marginBottom: 20, borderTopWidth: 1, borderBottomWidth: 1, borderColor: "#333", paddingVertical: 16 }}>
