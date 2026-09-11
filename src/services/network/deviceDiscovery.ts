@@ -55,35 +55,56 @@ export class DeviceDiscovery {
     try {
       const state = await NetInfo.fetch();
       const details = state.details as any;
-      let ip: string | null = typeof details?.ipAddress === "string" ? details.ipAddress : null;
+      let ip: string | null = null;
 
-      if (!ip || !/^(?:\d{1,3}\.){3}\d{1,3}$/.test(ip) || ip === "0.0.0.0") {
-        try {
-          const deviceInfoIp = await getIpAddress();
-          if (/^(?:\d{1,3}\.){3}\d{1,3}$/.test(deviceInfoIp) && deviceInfoIp !== "0.0.0.0") ip = deviceInfoIp;
-        } catch {}
+      // Prefer the native device-info address. On Android hotspot mode,
+      // NetInfo can report the cellular/default interface instead of the
+      // actual local tethering interface.
+      try {
+        const deviceInfoIp = await getIpAddress();
+        if (/^(?:\d{1,3}\.){3}\d{1,3}$/.test(deviceInfoIp) && deviceInfoIp !== "0.0.0.0") ip = deviceInfoIp;
+      } catch {}
+
+      if (!ip) {
+        const netInfoIp = typeof details?.ipAddress === "string" ? details.ipAddress : null;
+        if (netInfoIp && /^(?:\d{1,3}\.){3}\d{1,3}$/.test(netInfoIp) && netInfoIp !== "0.0.0.0") ip = netInfoIp;
       }
 
-      const subnet = typeof details?.subnet === "string" && details.subnet.length > 0
-        ? details.subnet
-        : "255.255.255.0";
-      const isWifi = state.type === "wifi";
-
-      if (ip && ip !== "0.0.0.0") {
-        console.log(`Network available: ${state.type}, IP ${ip}, subnet ${subnet}`);
-        return { ip, subnet, isWifi, fallback: false };
+      if (!ip) {
+        console.log("No local IPv4 reported; starting hotspot fallback scan");
+        return { ip: "192.168.43.1", subnet: "255.255.255.0", isWifi: true, fallback: true };
       }
 
-      // When this Android phone is acting as the hotspot, Android may expose
-      // the cellular network to NetInfo instead of the hotspot/AP interface.
-      // There is still a local tethering network, so discovery must not stop.
-      console.log("No local IPv4 reported; starting hotspot fallback scan");
-      return { ip: "192.168.43.1", subnet: "255.255.255.0", isWifi: true, fallback: true };
+      // For local IPv4 networks, /24 is the safe fallback when Android gives
+      // us a missing, host-only, or otherwise unusable subnet. This is
+      // especially important for phone hotspot networks such as 10.x.x.x.
+      let subnet = typeof details?.subnet === "string" ? details.subnet : "";
+      if (!this.isUsableSubnet(subnet)) subnet = "255.255.255.0";
+
+      console.log(`Network available: ${state.type}, IP ${ip}, subnet ${subnet}`);
+      return { ip, subnet, isWifi: state.type === "wifi" || this.isPrivateIpv4(ip), fallback: false };
     } catch (e) {
       console.error("Failed to get network info:", e);
       console.log("Starting hotspot fallback scan");
       return { ip: "192.168.43.1", subnet: "255.255.255.0", isWifi: true, fallback: true };
     }
+  }
+
+  private isUsableSubnet(subnet: string): boolean {
+    const parts = subnet.split(".").map(Number);
+    if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return false;
+    // Reject 0.0.0.0 and host-only masks such as 255.255.255.255.
+    const value = parts.reduce((acc, part) => (acc * 256) + part, 0);
+    if (value === 0 || value === 0xffffffff) return false;
+    // A valid IPv4 netmask must have contiguous 1-bits followed by 0-bits.
+    const inverted = (~value) >>> 0;
+    return (inverted & (inverted + 1)) === 0;
+  }
+
+  private isPrivateIpv4(ip: string): boolean {
+    const parts = ip.split(".").map(Number);
+    if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return false;
+    return parts[0] === 10 || (parts[0] === 192 && parts[1] === 168) || (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31);
   }
 
   addDevice(device: Device): void {
@@ -197,14 +218,20 @@ export class DeviceDiscovery {
   private getSubnetAddresses(ip: string, subnet: string): string[] {
     const ipParts = ip.split(".").map(Number);
     const maskParts = subnet.split(".").map(Number);
-    if (ipParts.length !== 4 || maskParts.length !== 4 || ipParts.some((part) => !Number.isInteger(part) || part < 0 || part > 255) || maskParts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return [];
+    const validIp = ipParts.length === 4 && ipParts.every((part) => Number.isInteger(part) && part >= 0 && part <= 255);
+    const validMask = this.isUsableSubnet(subnet);
+    if (!validIp) return this.getCommonHotspotAddresses();
+    if (!validMask) subnet = "255.255.255.0";
+
+    const mask = subnet.split(".").map(Number);
     const ipNumber = ((ipParts[0] << 24) >>> 0) | (ipParts[1] << 16) | (ipParts[2] << 8) | ipParts[3];
-    const maskNumber = ((maskParts[0] << 24) >>> 0) | (maskParts[1] << 16) | (maskParts[2] << 8) | maskParts[3];
+    const maskNumber = ((mask[0] << 24) >>> 0) | ((mask[1] << 16) >>> 0) | ((mask[2] << 8) >>> 0) | mask[3];
     const networkNumber = (ipNumber & maskNumber) >>> 0;
     const broadcastNumber = (networkNumber | (~maskNumber >>> 0)) >>> 0;
     const addresses: string[] = [];
     const start = networkNumber + 1;
     const end = broadcastNumber - 1;
+
     if (end - start > 1022) {
       const prefix = ipParts.slice(0, 3).join(".");
       for (let host = 1; host <= 254; host++) { const candidate = `${prefix}.${host}`; if (candidate !== ip) addresses.push(candidate); }
