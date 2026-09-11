@@ -60,10 +60,16 @@ export function CommunicationProvider({ children }: { children: React.ReactNode 
         break;
       case "speech_message": {
         const speechMsg = msg as SpeechMessage;
+        const incomingText = typeof speechMsg.text === "string" ? speechMsg.text : String(speechMsg.text ?? "");
+        console.log("[MESSAGE DEBUG] incoming text:", JSON.stringify(incomingText), "length:", incomingText.length, "id:", speechMsg.id);
         const senderName = speechMsg.senderId === disc.getDeviceId() ? "You (loopback)" : "Remote device";
-        const chatMsg: ChatMessage = { id: speechMsg.id, senderId: speechMsg.senderId, senderName, text: speechMsg.text, timestamp: speechMsg.timestamp };
-        setMessages((prev) => prev.some((item) => item.id === chatMsg.id) ? prev : [...prev, chatMsg]);
-        void getTextToSpeechService().speak(speechMsg.text);
+        const chatMsg: ChatMessage = { id: speechMsg.id, senderId: speechMsg.senderId, senderName, text: incomingText, timestamp: speechMsg.timestamp };
+        setMessages((prev) => {
+          const duplicate = prev.some((item) => item.id === chatMsg.id);
+          console.log("[MESSAGE DEBUG] setMessages text:", JSON.stringify(chatMsg.text), "length:", chatMsg.text.length, "duplicate:", duplicate);
+          return duplicate ? prev : [...prev, chatMsg];
+        });
+        void getTextToSpeechService().speak(incomingText);
         break;
       }
       case "call_end": setCallState("idle"); setCurrentDevice(null); setIncomingCallFrom(null); setMessages([]); break;
@@ -84,9 +90,6 @@ export function CommunicationProvider({ children }: { children: React.ReactNode 
         disc.onDevicesChanged((newDevices) => {
           if (!active) return;
           setDevices(newDevices);
-
-          // Discovery is only the lookup step. Once a device is found, create a
-          // separate persistent communication connection and keep it open.
           const device = newDevices[0];
           if (!device?.ip || tcpService.isConnected() || autoConnecting.current) return;
           autoConnecting.current = true;
@@ -102,9 +105,6 @@ export function CommunicationProvider({ children }: { children: React.ReactNode 
           if (active) setIsConnected(connected);
           if (!connected) autoConnecting.current = false;
         });
-
-        // Start the communication server before discovery so an immediate
-        // discovered-device connection always has the local server ready.
         await tcpService.startServer();
         disc.startDiscovery();
       } catch (error) { console.error("Failed to initialize communication services:", error); }
@@ -134,11 +134,7 @@ export function CommunicationProvider({ children }: { children: React.ReactNode 
     if (!tcp || !device.ip) return;
     setCurrentDevice(device); setCallState("calling"); setIncomingCallFrom(null);
     try {
-      // Discovery may already have established the persistent connection.
-      // Reconnect only when the selected device is not the current TCP peer.
-      if (!tcp.isConnectedTo(device.ip, device.port || TCP_PORT)) {
-        await tcp.connectToDevice(device.ip, device.port || TCP_PORT);
-      }
+      if (!tcp.isConnectedTo(device.ip, device.port || TCP_PORT)) await tcp.connectToDevice(device.ip, device.port || TCP_PORT);
       await tcp.sendMessage({ type: "call_request", senderId: deviceId, senderName: deviceName, timestamp: Date.now() });
     }
     catch (error) { console.error("Failed to call device:", error); await tcp.disconnect(); setCallState("idle"); setCurrentDevice(null); }
@@ -165,6 +161,7 @@ export function CommunicationProvider({ children }: { children: React.ReactNode 
   const sendMessage = useCallback(async (text: string) => {
     const trimmed = text.trim(); if (!tcp || !trimmed || !tcp.isConnected()) return;
     const msg: SpeechMessage = { type: "speech_message", id: generateUUID(), senderId: deviceId, text: trimmed, timestamp: Date.now() };
+    console.log("[MESSAGE DEBUG] outgoing text:", JSON.stringify(msg.text), "length:", msg.text.length, "id:", msg.id);
     await tcp.sendMessage(msg);
     setMessages((prev) => prev.some((item) => item.id === msg.id) ? prev : [...prev, { id: msg.id, senderId: deviceId, senderName: deviceName || "You", text: trimmed, timestamp: msg.timestamp }]);
   }, [tcp, deviceId, deviceName]);
