@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Animated, Modal, Pressable, ScrollView, Text, TextInput, TouchableOpacity, View } from "react-native";
+import { Animated, Dimensions, Modal, Pressable, ScrollView, Text, TextInput, TouchableOpacity, View } from "react-native";
 import "../../global.css";
 import { useCommunication } from "../context/CommunicationContext";
 import { ChatMessage as ChatMessageType } from "../types/communication";
