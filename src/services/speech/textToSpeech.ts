@@ -13,11 +13,7 @@ export class TextToSpeechService {
 
   private async initialize(): Promise<void> {
     try {
-      const voices = await Speech.getAvailableVoicesAsync();
-      const englishVoices = voices.filter((voice) =>
-        voice.language?.toLowerCase().startsWith("en"),
-      );
-      void englishVoices;
+      await Speech.getAvailableVoicesAsync();
     } catch (e) {
       console.error("TTS initialization error:", e);
     }
@@ -48,7 +44,6 @@ export class TextToSpeechService {
         language: "en-US",
         pitch: 1.0,
         rate: 0.9,
-        onStart: () => {},
         onDone: () => {
           this.isSpeaking = false;
           this.onFinishCallbacks.forEach((cb) => cb());
