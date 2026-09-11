@@ -51,56 +51,39 @@ export class DeviceDiscovery {
     } catch { this.deviceName = `Device-${this.deviceId.substring(0, 8)}`; }
   }
 
-  async getNetworkInfo(): Promise<{ ip: string; subnet: string; isWifi: boolean } | null> {
+  async getNetworkInfo(): Promise<{ ip: string; subnet: string; isWifi: boolean; fallback: boolean } | null> {
     try {
       const state = await NetInfo.fetch();
       const details = state.details as any;
-      let ip = typeof details?.ipAddress === "string" ? details.ipAddress : null;
+      let ip: string | null = typeof details?.ipAddress === "string" ? details.ipAddress : null;
 
-      if (!ip) {
+      if (!ip || !/^(?:\d{1,3}\.){3}\d{1,3}$/.test(ip) || ip === "0.0.0.0") {
         try {
           const deviceInfoIp = await getIpAddress();
-          if (/^(?:\d{1,3}\.){3}\d{1,3}$/.test(deviceInfoIp)) ip = deviceInfoIp;
+          if (/^(?:\d{1,3}\.){3}\d{1,3}$/.test(deviceInfoIp) && deviceInfoIp !== "0.0.0.0") ip = deviceInfoIp;
         } catch {}
-      }
-
-      // Android hotspot/tethering can report an incomplete NetInfo object.
-      // Keep discovery alive by using the standard /24 tethering ranges when
-      // Android does not expose the interface address to React Native.
-      if (!ip || ip === "0.0.0.0") {
-        const fallbackIp = await this.findLikelyLocalIpv4();
-        if (fallbackIp) ip = fallbackIp;
-      }
-
-      if (!ip || ip === "0.0.0.0") {
-        console.log("Device discovery skipped: no local IPv4 address");
-        return null;
       }
 
       const subnet = typeof details?.subnet === "string" && details.subnet.length > 0
         ? details.subnet
         : "255.255.255.0";
-      const isWifi = state.type === "wifi" || this.isPrivateIpv4(ip);
-      console.log(`Network available: ${state.type}, IP ${ip}, subnet ${subnet}`);
-      return { ip, subnet, isWifi };
+      const isWifi = state.type === "wifi";
+
+      if (ip && ip !== "0.0.0.0") {
+        console.log(`Network available: ${state.type}, IP ${ip}, subnet ${subnet}`);
+        return { ip, subnet, isWifi, fallback: false };
+      }
+
+      // When this Android phone is acting as the hotspot, Android may expose
+      // the cellular network to NetInfo instead of the hotspot/AP interface.
+      // There is still a local tethering network, so discovery must not stop.
+      console.log("No local IPv4 reported; starting hotspot fallback scan");
+      return { ip: "192.168.43.1", subnet: "255.255.255.0", isWifi: true, fallback: true };
     } catch (e) {
       console.error("Failed to get network info:", e);
-      return null;
+      console.log("Starting hotspot fallback scan");
+      return { ip: "192.168.43.1", subnet: "255.255.255.0", isWifi: true, fallback: true };
     }
-  }
-
-  private async findLikelyLocalIpv4(): Promise<string | null> {
-    try {
-      const ip = await getIpAddress();
-      if (/^(?:\d{1,3}\.){3}\d{1,3}$/.test(ip) && ip !== "0.0.0.0") return ip;
-    } catch {}
-    return null;
-  }
-
-  private isPrivateIpv4(ip: string): boolean {
-    const parts = ip.split(".").map(Number);
-    if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return false;
-    return parts[0] === 10 || parts[0] === 192 && parts[1] === 168 || parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31;
   }
 
   addDevice(device: Device): void {
@@ -171,16 +154,26 @@ export class DeviceDiscovery {
         this.notifyScanStatus();
         return;
       }
-      const addresses = this.getSubnetAddresses(network.ip, network.subnet);
+
+      const addresses = network.fallback
+        ? this.getCommonHotspotAddresses()
+        : this.getSubnetAddresses(network.ip, network.subnet);
+
       this.scanStatus = { scanning: true, currentIp: null, scanned: 0, total: addresses.length, found: this.discoveredDevices.size };
       this.notifyScanStatus();
-      console.log(`Scanning ${addresses.length} local addresses for iTantra devices...`);
+      console.log(`[DISCOVERY SCAN] Scanning ${addresses.length} addresses on ports 5556 and 5555${network.fallback ? " (hotspot fallback)" : ""}`);
+
       for (let index = 0; index < addresses.length; index += MAX_CONCURRENT_SCANS) {
         const batch = addresses.slice(index, index + MAX_CONCURRENT_SCANS);
         this.scanStatus = { ...this.scanStatus, currentIp: batch[0] || null };
         this.notifyScanStatus();
         await Promise.all(batch.map((ip) => this.probeDevice(ip)));
-        this.scanStatus = { ...this.scanStatus, scanned: Math.min(index + batch.length, addresses.length), currentIp: addresses[Math.min(index + batch.length, addresses.length) - 1] || null, found: this.discoveredDevices.size };
+        this.scanStatus = {
+          ...this.scanStatus,
+          scanned: Math.min(index + batch.length, addresses.length),
+          currentIp: addresses[Math.min(index + batch.length, addresses.length) - 1] || null,
+          found: this.discoveredDevices.size,
+        };
         this.notifyScanStatus();
       }
     } catch (error) {
@@ -192,26 +185,26 @@ export class DeviceDiscovery {
     }
   }
 
+  private getCommonHotspotAddresses(): string[] {
+    const prefixes = ["192.168.43", "192.168.137", "192.168.42"];
+    const addresses: string[] = [];
+    for (const prefix of prefixes) {
+      for (let host = 1; host <= 254; host++) addresses.push(`${prefix}.${host}`);
+    }
+    return addresses;
+  }
+
   private getSubnetAddresses(ip: string, subnet: string): string[] {
     const ipParts = ip.split(".").map(Number);
     const maskParts = subnet.split(".").map(Number);
-    const validIp = ipParts.length === 4 && ipParts.every((part) => Number.isInteger(part) && part >= 0 && part <= 255);
-    const validMask = maskParts.length === 4 && maskParts.every((part) => Number.isInteger(part) && part >= 0 && part <= 255);
-
-    // Some Android hotspot implementations expose the IP but return an
-    // unusable/zero subnet. In that case, scan the normal tethering /24.
-    if (!validIp) return this.getCommonHotspotAddresses();
-    if (!validMask || subnet === "0.0.0.0") subnet = "255.255.255.0";
-
-    const mask = subnet.split(".").map(Number);
+    if (ipParts.length !== 4 || maskParts.length !== 4 || ipParts.some((part) => !Number.isInteger(part) || part < 0 || part > 255) || maskParts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return [];
     const ipNumber = ((ipParts[0] << 24) >>> 0) | (ipParts[1] << 16) | (ipParts[2] << 8) | ipParts[3];
-    const maskNumber = ((mask[0] << 24) >>> 0) | (mask[1] << 16) | (mask[2] << 8) | mask[3];
+    const maskNumber = ((maskParts[0] << 24) >>> 0) | (maskParts[1] << 16) | (maskParts[2] << 8) | maskParts[3];
     const networkNumber = (ipNumber & maskNumber) >>> 0;
     const broadcastNumber = (networkNumber | (~maskNumber >>> 0)) >>> 0;
     const addresses: string[] = [];
     const start = networkNumber + 1;
     const end = broadcastNumber - 1;
-
     if (end - start > 1022) {
       const prefix = ipParts.slice(0, 3).join(".");
       for (let host = 1; host <= 254; host++) { const candidate = `${prefix}.${host}`; if (candidate !== ip) addresses.push(candidate); }
@@ -224,20 +217,9 @@ export class DeviceDiscovery {
     return addresses;
   }
 
-  private getCommonHotspotAddresses(): string[] {
-    // Common Android/Windows tethering networks. This is only a fallback when
-    // the platform does not expose a usable local IPv4 address/subnet.
-    const prefixes = ["192.168.43", "192.168.137", "192.168.42"];
-    const addresses: string[] = [];
-    for (const prefix of prefixes) {
-      for (let host = 1; host <= 254; host++) addresses.push(`${prefix}.${host}`);
-    }
-    return addresses;
-  }
-
   private probeDevice(ip: string): Promise<void> {
     return this.probePort(ip, DISCOVERY_PORT, true).then((found) => {
-      if (!found) return this.probePort(ip, TCP_PORT, false).then((fallbackFound) => { if (fallbackFound) return; });
+      if (!found) return this.probePort(ip, TCP_PORT, false).then(() => undefined);
     });
   }
 
