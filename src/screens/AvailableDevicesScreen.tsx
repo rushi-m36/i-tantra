@@ -41,7 +41,7 @@ export default function AvailableDevicesScreen() {
   const handleRefresh = () => {
     if (scanStatus.scanning) return;
     refreshDiscovery();
-    DeviceEventEmitter.emit("itantraRefreshDiscovery");
+    setTimeout(() => DeviceEventEmitter.emit("itantraRefreshDiscovery"), 0);
   };
 
   const handleAddDevice = () => {
