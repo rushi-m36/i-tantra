@@ -18,6 +18,7 @@ export function DiscoveryLifecycle() {
   useEffect(() => {
     let active = true;
     let fallbackTimer: ReturnType<typeof setTimeout> | null = null;
+    let nsdSubscription: { remove: () => void } | null = null;
 
     void getDeviceDiscovery().then((discovery) => {
       if (!active) return;
@@ -37,7 +38,7 @@ export function DiscoveryLifecycle() {
       const ownServiceName = `iTantra-${discovery.getDeviceId().slice(-8)}`;
       let nsdFoundDevice = false;
 
-      const subscription = DeviceEventEmitter.addListener(
+      nsdSubscription = DeviceEventEmitter.addListener(
         "itantraNsdDeviceFound",
         (device: NsdDevice) => {
           if (!active || nsdFoundDevice) return;
@@ -68,17 +69,13 @@ export function DiscoveryLifecycle() {
       fallbackTimer = setTimeout(() => {
         if (active && !nsdFoundDevice) discovery.startDiscovery();
       }, NSD_FALLBACK_DELAY);
-
-      return () => {
-        subscription.remove();
-        if (fallbackTimer) clearTimeout(fallbackTimer);
-        NativeModules.NsdDiscovery?.stop?.();
-      };
     });
 
     return () => {
       active = false;
       if (fallbackTimer) clearTimeout(fallbackTimer);
+      nsdSubscription?.remove();
+      NativeModules.NsdDiscovery?.stop?.();
     };
   }, [callState]);
 
