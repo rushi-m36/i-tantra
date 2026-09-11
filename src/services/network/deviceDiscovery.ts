@@ -8,10 +8,12 @@ const DISCOVERY_PORT = 5556;
 const TCP_PORT = 5555;
 const SCAN_INTERVAL = 5000;
 const DEVICE_TIMEOUT = 12000;
-// Hotspot networks can take longer to establish an outbound TCP connection
-// than a normal LAN. The previous 1200ms timeout was too aggressive.
 const CONNECT_TIMEOUT = 3500;
-const MAX_CONCURRENT_SCANS = 20;
+// Temporary diagnostic settings: scan only .100-.130 and keep concurrency low.
+// Restore the full-subnet scan and higher concurrency after hotspot discovery works.
+const MAX_CONCURRENT_SCANS = 4;
+const DIAGNOSTIC_SCAN_START = 100;
+const DIAGNOSTIC_SCAN_END = 130;
 const DISCOVERY_REQUEST = "ITANTRA_DISCOVER_V1";
 const TCP_PROBE = "ITANTRA_PROBE_V1";
 
@@ -92,8 +94,6 @@ export class DeviceDiscovery {
         return { ip: "192.168.43.1", subnet: "255.255.255.0", isWifi: true, fallback: true };
       }
 
-      // Prefer the first native private interface. This is the address that
-      // Android exposes on the actual local/tethering interface.
       const ip = privateIps[0];
       let subnet = typeof details?.subnet === "string" ? details.subnet : "";
       if (!this.isUsableSubnet(subnet)) subnet = "255.255.255.0";
@@ -184,7 +184,7 @@ export class DeviceDiscovery {
       });
       this.discoveryServer.listen({ port: DISCOVERY_PORT, host: "0.0.0.0", reuseAddress: true }, () => console.log("Device discovery listening on port", DISCOVERY_PORT));
     } catch (error) {
-      console.error("Failed to start device discovery server:", error);
+      console.error("Failed to start device discovery:", error);
       this.discoveryServer = null;
     }
   }
@@ -206,7 +206,8 @@ export class DeviceDiscovery {
 
       this.scanStatus = { scanning: true, currentIp: null, scanned: 0, total: addresses.length, found: this.discoveredDevices.size };
       this.notifyScanStatus();
-      console.log(`[DISCOVERY SCAN] Scanning ${addresses.length} addresses on ports ${TCP_PORT} and ${DISCOVERY_PORT}${network.fallback ? " (hotspot fallback)" : ""}`);
+      console.log(`[DISCOVERY SCAN] Diagnostic range: .${DIAGNOSTIC_SCAN_START}-.${DIAGNOSTIC_SCAN_END}`);
+      console.log(`[DISCOVERY SCAN] Scanning ${addresses.length} addresses on port ${TCP_PORT} first, then ${DISCOVERY_PORT}${network.fallback ? " (hotspot fallback)" : ""}`);
 
       for (let index = 0; index < addresses.length; index += MAX_CONCURRENT_SCANS) {
         const batch = addresses.slice(index, index + MAX_CONCURRENT_SCANS);
@@ -220,9 +221,7 @@ export class DeviceDiscovery {
           found: this.discoveredDevices.size,
         };
         this.notifyScanStatus();
-        if ((index + batch.length) % 100 < MAX_CONCURRENT_SCANS || index + batch.length === addresses.length) {
-          console.log(`[DISCOVERY SCAN] Progress: ${Math.min(index + batch.length, addresses.length)}/${addresses.length}, found ${this.discoveredDevices.size}`);
-        }
+        console.log(`[DISCOVERY SCAN] Progress: ${Math.min(index + batch.length, addresses.length)}/${addresses.length}, found ${this.discoveredDevices.size}`);
       }
     } catch (error) {
       console.error("Local network scan failed:", error);
@@ -258,8 +257,20 @@ export class DeviceDiscovery {
     const start = networkNumber + 1;
     const end = broadcastNumber - 1;
 
+    // Temporary diagnostic scan: only test .100 through .130 on the same /24.
+    // This deliberately includes the laptop at 10.190.147.112.
+    const prefix = ipParts.slice(0, 3).join(".");
+    const diagnosticStart = Math.max(DIAGNOSTIC_SCAN_START, (start >>> 0) & 255);
+    const diagnosticEnd = Math.min(DIAGNOSTIC_SCAN_END, (end >>> 0) & 255);
+    if (prefix === "10.190.147" && diagnosticStart <= diagnosticEnd) {
+      for (let host = diagnosticStart; host <= diagnosticEnd; host++) {
+        const candidate = `${prefix}.${host}`;
+        if (candidate !== ip) addresses.push(candidate);
+      }
+      return addresses;
+    }
+
     if (end - start > 1022) {
-      const prefix = ipParts.slice(0, 3).join(".");
       for (let host = 1; host <= 254; host++) { const candidate = `${prefix}.${host}`; if (candidate !== ip) addresses.push(candidate); }
       return addresses;
     }
@@ -271,31 +282,34 @@ export class DeviceDiscovery {
   }
 
   private probeDevice(ip: string): Promise<void> {
-    // TCP 5555 is the known-working path on the laptop. Probe it first so
-    // discovery does not depend on Windows firewall treatment of 5556.
     return this.probePort(ip, TCP_PORT, false).then((found) => {
       if (!found) return this.probePort(ip, DISCOVERY_PORT, true).then(() => undefined);
     });
   }
 
   private probePort(ip: string, port: number, discoveryPort: boolean): Promise<boolean> {
+    const diagnosticTarget = ip === "10.190.147.112";
+    if (diagnosticTarget) console.log(`[DISCOVERY PROBE] Trying ${ip}:${port}`);
+
     return new Promise((resolve) => {
       let socket: any = null;
       let settled = false;
       let timer: ReturnType<typeof setTimeout> | null = null;
       let responseBuffer = "";
-      const finish = (found = false) => {
+      const finish = (found = false, reason = "unknown") => {
         if (settled) return;
         settled = true;
         if (timer) clearTimeout(timer);
         if (socket && !socket.destroyed) socket.destroy();
+        if (diagnosticTarget) console.log(`[DISCOVERY PROBE] ${ip}:${port} -> ${reason}`);
         resolve(found);
       };
       try {
         socket = TcpSocket.createConnection({ host: ip, port, reuseAddress: true, connectTimeout: CONNECT_TIMEOUT }, () => {
+          if (diagnosticTarget) console.log(`[DISCOVERY PROBE] Connected to ${ip}:${port}`);
           socket.write(`${discoveryPort ? DISCOVERY_REQUEST : TCP_PROBE}\n`);
         });
-        timer = setTimeout(() => finish(false), CONNECT_TIMEOUT + 500);
+        timer = setTimeout(() => finish(false, "timeout"), CONNECT_TIMEOUT + 500);
         socket.on("data", (data: any) => {
           try {
             responseBuffer += typeof data === "string" ? data : data.toString("utf8");
@@ -303,16 +317,17 @@ export class DeviceDiscovery {
             const response = JSON.parse(line) as DiscoveryResponse;
             const expectedMagic = discoveryPort ? DISCOVERY_REQUEST : TCP_PROBE;
             if (response.magic === expectedMagic && response.id && response.id !== this.deviceId && response.name) {
+              if (diagnosticTarget) console.log(`[DISCOVERY PROBE] Valid response from ${ip}:${port}`);
               this.addDevice({ id: response.id, name: response.name, ip, port: response.port || TCP_PORT, status: "available", lastSeen: Date.now() });
-              finish(true);
+              finish(true, "FOUND");
               return;
             }
           } catch {}
-          if (discoveryPort) finish(false);
+          if (discoveryPort) finish(false, "invalid response");
         });
-        socket.on("error", () => finish(false));
-        socket.on("close", () => finish(false));
-      } catch { finish(false); }
+        socket.on("error", (error: any) => finish(false, `error ${error?.code || error?.message || "unknown"}`));
+        socket.on("close", () => finish(false, "closed"));
+      } catch (error: any) { finish(false, `exception ${error?.message || "unknown"}`); }
     });
   }
 
