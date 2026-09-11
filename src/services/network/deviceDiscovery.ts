@@ -8,7 +8,9 @@ const DISCOVERY_PORT = 5556;
 const TCP_PORT = 5555;
 const SCAN_INTERVAL = 5000;
 const DEVICE_TIMEOUT = 12000;
-const CONNECT_TIMEOUT = 1200;
+// Hotspot networks can take longer to establish an outbound TCP connection
+// than a normal LAN. The previous 1200ms timeout was too aggressive.
+const CONNECT_TIMEOUT = 3500;
 const MAX_CONCURRENT_SCANS = 20;
 const DISCOVERY_REQUEST = "ITANTRA_DISCOVER_V1";
 const TCP_PROBE = "ITANTRA_PROBE_V1";
@@ -60,12 +62,8 @@ export class DeviceDiscovery {
     try {
       const state = await NetInfo.fetch();
       const details = state.details as any;
-
-      // On Android hotspot/tethering, NetInfo and react-native-device-info can
-      // report the wrong interface or no address at all. Ask Android directly
-      // for every active non-loopback IPv4 interface and use those addresses
-      // as the source of truth for local-network scanning.
       let nativeIps: string[] = [];
+
       try {
         if (LocalNetwork?.getLocalIPv4Addresses) {
           nativeIps = (await LocalNetwork.getLocalIPv4Addresses()).filter((value) => this.isValidIpv4(value));
@@ -94,6 +92,8 @@ export class DeviceDiscovery {
         return { ip: "192.168.43.1", subnet: "255.255.255.0", isWifi: true, fallback: true };
       }
 
+      // Prefer the first native private interface. This is the address that
+      // Android exposes on the actual local/tethering interface.
       const ip = privateIps[0];
       let subnet = typeof details?.subnet === "string" ? details.subnet : "";
       if (!this.isUsableSubnet(subnet)) subnet = "255.255.255.0";
@@ -206,7 +206,7 @@ export class DeviceDiscovery {
 
       this.scanStatus = { scanning: true, currentIp: null, scanned: 0, total: addresses.length, found: this.discoveredDevices.size };
       this.notifyScanStatus();
-      console.log(`[DISCOVERY SCAN] Scanning ${addresses.length} addresses on ports 5556 and 5555${network.fallback ? " (hotspot fallback)" : ""}`);
+      console.log(`[DISCOVERY SCAN] Scanning ${addresses.length} addresses on ports ${TCP_PORT} and ${DISCOVERY_PORT}${network.fallback ? " (hotspot fallback)" : ""}`);
 
       for (let index = 0; index < addresses.length; index += MAX_CONCURRENT_SCANS) {
         const batch = addresses.slice(index, index + MAX_CONCURRENT_SCANS);
@@ -220,6 +220,9 @@ export class DeviceDiscovery {
           found: this.discoveredDevices.size,
         };
         this.notifyScanStatus();
+        if ((index + batch.length) % 100 < MAX_CONCURRENT_SCANS || index + batch.length === addresses.length) {
+          console.log(`[DISCOVERY SCAN] Progress: ${Math.min(index + batch.length, addresses.length)}/${addresses.length}, found ${this.discoveredDevices.size}`);
+        }
       }
     } catch (error) {
       console.error("Local network scan failed:", error);
@@ -241,7 +244,7 @@ export class DeviceDiscovery {
 
   private getSubnetAddresses(ip: string, subnet: string): string[] {
     const ipParts = ip.split(".").map(Number);
-    const validIp = this.isValidIpv4(ip);
+    const validIp = ipParts.length === 4 && ipParts.every((part) => Number.isInteger(part) && part >= 0 && part <= 255);
     const validMask = this.isUsableSubnet(subnet);
     if (!validIp) return this.getCommonHotspotAddresses();
     if (!validMask) subnet = "255.255.255.0";
@@ -268,8 +271,10 @@ export class DeviceDiscovery {
   }
 
   private probeDevice(ip: string): Promise<void> {
-    return this.probePort(ip, DISCOVERY_PORT, true).then((found) => {
-      if (!found) return this.probePort(ip, TCP_PORT, false).then(() => undefined);
+    // TCP 5555 is the known-working path on the laptop. Probe it first so
+    // discovery does not depend on Windows firewall treatment of 5556.
+    return this.probePort(ip, TCP_PORT, false).then((found) => {
+      if (!found) return this.probePort(ip, DISCOVERY_PORT, true).then(() => undefined);
     });
   }
 
