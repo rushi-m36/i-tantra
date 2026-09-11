@@ -71,12 +71,14 @@ export default function CommunicationScreen() {
           };
           const own = safeItem.senderId === localDeviceId;
           return (
-            <View key={safeItem.id} style={{ marginBottom: 14, width: "100%", alignItems: own ? "flex-end" : "flex-start" }}>
-              <Text style={{ maxWidth: "82%", marginHorizontal: 8, marginBottom: 5, fontSize: 10, fontWeight: "700", color: MUTED, textTransform: "uppercase", letterSpacing: 0.8 }}>{own ? "You" : safeItem.senderName}</Text>
-              <View style={{ maxWidth: "82%", alignSelf: own ? "flex-end" : "flex-start", backgroundColor: own ? BUBBLE : "#1d1d1d", borderRadius: 22, paddingHorizontal: 16, paddingVertical: 11, borderWidth: 1, borderColor: BORDER }}>
-                <Text style={{ fontSize: 16, lineHeight: 23, color: FG, includeFontPadding: true }}>{safeItem.text}</Text>
+            <View key={safeItem.id} style={{ marginBottom: 14, width: "100%" }}>
+              <View style={{ width: "100%", alignItems: own ? "flex-end" : "flex-start" }}>
+                <Text style={{ width: "82%", textAlign: own ? "right" : "left", marginBottom: 5, fontSize: 10, fontWeight: "700", color: MUTED, textTransform: "uppercase", letterSpacing: 0.8 }}>{own ? "You" : safeItem.senderName}</Text>
+                <View style={{ width: "82%", alignSelf: own ? "flex-end" : "flex-start", backgroundColor: own ? BUBBLE : "#1d1d1d", borderRadius: 22, paddingHorizontal: 16, paddingVertical: 11, borderWidth: 1, borderColor: BORDER }}>
+                  <Text style={{ width: "100%", fontSize: 16, lineHeight: 23, color: FG, includeFontPadding: true, flexShrink: 1 }}>{safeItem.text}</Text>
+                </View>
+                <Text style={{ width: "82%", textAlign: own ? "right" : "left", marginTop: 4, fontSize: 9, color: "#666" }}>{new Date(safeItem.timestamp).toLocaleTimeString()}</Text>
               </View>
-              <Text style={{ maxWidth: "82%", marginHorizontal: 8, marginTop: 4, fontSize: 9, color: "#666" }}>{new Date(safeItem.timestamp).toLocaleTimeString()}</Text>
             </View>
           );
         })}
