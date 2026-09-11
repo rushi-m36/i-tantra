@@ -71,7 +71,7 @@ export default function AvailableDevicesScreen() {
     );
   }
 
-  const discoveryText = scanStatus.phase === "nsd" ? "Finding devices via NSD" : scanStatus.phase === "nsd-found" ? "Device found via NSD" : scanStatus.phase === "tcp" ? "NSD not found — scanning via TCP" : devices.length > 0 ? `${devices.length} device${devices.length === 1 ? "" : "s"} found on this network` : "Waiting for discovery";
+  const discoveryText = scanStatus.phase === "nsd" ? "Finding devices via NSD" : scanStatus.phase === "nsd-found" ? "Device found via NSD" : devices.length > 0 ? `${devices.length} device${devices.length === 1 ? "" : "s"} found on this network` : "Waiting for discovery";
 
   return (
     <View style={{ flex: 1, backgroundColor: "#080808", paddingHorizontal: 24, paddingTop: 64 }}>
@@ -92,11 +92,9 @@ export default function AvailableDevicesScreen() {
 
       <View style={{ marginBottom: 20, borderTopWidth: 1, borderBottomWidth: 1, borderColor: "#333", paddingVertical: 16 }}>
         <View style={{ flexDirection: "row", alignItems: "center" }}>
-          {(scanStatus.phase === "nsd" || scanStatus.phase === "tcp") && <ActivityIndicator size="small" color="#fff" />}
-          <Text style={{ marginLeft: scanStatus.phase === "nsd" || scanStatus.phase === "tcp" ? 12 : 0, fontWeight: "600", color: "#fff" }}>{discoveryText}</Text>
+          {scanStatus.phase === "nsd" && <ActivityIndicator size="small" color="#fff" />}
+          <Text style={{ marginLeft: scanStatus.phase === "nsd" ? 12 : 0, fontWeight: "600", color: "#fff" }}>{discoveryText}</Text>
         </View>
-        {scanStatus.phase === "tcp" && scanStatus.total > 0 && <Text style={{ marginTop: 8, fontSize: 12, color: "#888" }}>{scanStatus.scanned} / {scanStatus.total} addresses checked{scanStatus.currentIp ? ` · ${scanStatus.currentIp}` : ""}</Text>}
-        {scanStatus.phase === "tcp" && <Text style={{ marginTop: 4, fontSize: 12, color: "#666" }}>2 concurrent TCP probes</Text>}
       </View>
 
       <FlatList data={devices} keyExtractor={(item) => item.id} renderItem={({ item }) => <DeviceCard device={item} onCall={() => void handleCall(item)} isLoading={loading && currentDevice?.id === item.id} />} showsVerticalScrollIndicator={false} />
