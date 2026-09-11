@@ -1,5 +1,6 @@
 import NetInfo from "@react-native-community/netinfo";
 import { getDeviceName, getUniqueId, getIpAddress } from "react-native-device-info";
+import { NativeModules } from "react-native";
 import TcpSocket from "react-native-tcp-socket";
 import { Device } from "../../types/communication";
 
@@ -7,7 +8,7 @@ const DISCOVERY_PORT = 5556;
 const TCP_PORT = 5555;
 const SCAN_INTERVAL = 5000;
 const DEVICE_TIMEOUT = 12000;
-const CONNECT_TIMEOUT = 700;
+const CONNECT_TIMEOUT = 1200;
 const MAX_CONCURRENT_SCANS = 20;
 const DISCOVERY_REQUEST = "ITANTRA_DISCOVER_V1";
 const TCP_PROBE = "ITANTRA_PROBE_V1";
@@ -28,6 +29,10 @@ export interface ScanStatus {
   total: number;
   found: number;
 }
+
+const LocalNetwork = NativeModules.LocalNetwork as {
+  getLocalIPv4Addresses?: () => Promise<string[]>;
+} | undefined;
 
 export class DeviceDiscovery {
   private deviceId: string;
@@ -55,48 +60,67 @@ export class DeviceDiscovery {
     try {
       const state = await NetInfo.fetch();
       const details = state.details as any;
-      let ip: string | null = null;
 
-      // Prefer the native device-info address. On Android hotspot mode,
-      // NetInfo can report the cellular/default interface instead of the
-      // actual local tethering interface.
+      // On Android hotspot/tethering, NetInfo and react-native-device-info can
+      // report the wrong interface or no address at all. Ask Android directly
+      // for every active non-loopback IPv4 interface and use those addresses
+      // as the source of truth for local-network scanning.
+      let nativeIps: string[] = [];
       try {
-        const deviceInfoIp = await getIpAddress();
-        if (/^(?:\d{1,3}\.){3}\d{1,3}$/.test(deviceInfoIp) && deviceInfoIp !== "0.0.0.0") ip = deviceInfoIp;
-      } catch {}
-
-      if (!ip) {
-        const netInfoIp = typeof details?.ipAddress === "string" ? details.ipAddress : null;
-        if (netInfoIp && /^(?:\d{1,3}\.){3}\d{1,3}$/.test(netInfoIp) && netInfoIp !== "0.0.0.0") ip = netInfoIp;
+        if (LocalNetwork?.getLocalIPv4Addresses) {
+          nativeIps = (await LocalNetwork.getLocalIPv4Addresses()).filter((value) => this.isValidIpv4(value));
+        }
+      } catch (error) {
+        console.log("Native local IPv4 lookup failed:", error);
       }
 
-      if (!ip) {
-        console.log("No local IPv4 reported; starting hotspot fallback scan");
+      let deviceInfoIp: string | null = null;
+      try {
+        const value = await getIpAddress();
+        if (this.isValidIpv4(value)) deviceInfoIp = value;
+      } catch {}
+
+      const netInfoIp = typeof details?.ipAddress === "string" && this.isValidIpv4(details.ipAddress)
+        ? details.ipAddress
+        : null;
+
+      const privateIps = [...nativeIps, deviceInfoIp, netInfoIp]
+        .filter((value): value is string => !!value)
+        .filter((value, index, values) => values.indexOf(value) === index)
+        .filter((value) => this.isPrivateIpv4(value));
+
+      if (privateIps.length === 0) {
+        console.log("No private local IPv4 reported; starting common hotspot fallback scan");
         return { ip: "192.168.43.1", subnet: "255.255.255.0", isWifi: true, fallback: true };
       }
 
-      // For local IPv4 networks, /24 is the safe fallback when Android gives
-      // us a missing, host-only, or otherwise unusable subnet. This is
-      // especially important for phone hotspot networks such as 10.x.x.x.
+      const ip = privateIps[0];
       let subnet = typeof details?.subnet === "string" ? details.subnet : "";
       if (!this.isUsableSubnet(subnet)) subnet = "255.255.255.0";
 
       console.log(`Network available: ${state.type}, IP ${ip}, subnet ${subnet}`);
+      console.log(`[DISCOVERY NETWORK] Android IPv4 interfaces: ${privateIps.join(", ")}`);
       return { ip, subnet, isWifi: state.type === "wifi" || this.isPrivateIpv4(ip), fallback: false };
     } catch (e) {
       console.error("Failed to get network info:", e);
-      console.log("Starting hotspot fallback scan");
+      console.log("Starting common hotspot fallback scan");
       return { ip: "192.168.43.1", subnet: "255.255.255.0", isWifi: true, fallback: true };
     }
+  }
+
+  private isValidIpv4(ip: string | null | undefined): ip is string {
+    if (!ip || !/^(?:\d{1,3}\.){3}\d{1,3}$/.test(ip) || ip === "0.0.0.0") return false;
+    return ip.split(".").every((part) => {
+      const value = Number(part);
+      return Number.isInteger(value) && value >= 0 && value <= 255;
+    });
   }
 
   private isUsableSubnet(subnet: string): boolean {
     const parts = subnet.split(".").map(Number);
     if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return false;
-    // Reject 0.0.0.0 and host-only masks such as 255.255.255.255.
     const value = parts.reduce((acc, part) => (acc * 256) + part, 0);
     if (value === 0 || value === 0xffffffff) return false;
-    // A valid IPv4 netmask must have contiguous 1-bits followed by 0-bits.
     const inverted = (~value) >>> 0;
     return (inverted & (inverted + 1)) === 0;
   }
@@ -217,15 +241,14 @@ export class DeviceDiscovery {
 
   private getSubnetAddresses(ip: string, subnet: string): string[] {
     const ipParts = ip.split(".").map(Number);
-    const maskParts = subnet.split(".").map(Number);
-    const validIp = ipParts.length === 4 && ipParts.every((part) => Number.isInteger(part) && part >= 0 && part <= 255);
+    const validIp = this.isValidIpv4(ip);
     const validMask = this.isUsableSubnet(subnet);
     if (!validIp) return this.getCommonHotspotAddresses();
     if (!validMask) subnet = "255.255.255.0";
 
     const mask = subnet.split(".").map(Number);
     const ipNumber = ((ipParts[0] << 24) >>> 0) | (ipParts[1] << 16) | (ipParts[2] << 8) | ipParts[3];
-    const maskNumber = ((mask[0] << 24) >>> 0) | ((mask[1] << 16) >>> 0) | ((mask[2] << 8) >>> 0) | mask[3];
+    const maskNumber = ((mask[0] << 24) >>> 0) | (mask[1] << 16) | (mask[2] << 8) | mask[3];
     const networkNumber = (ipNumber & maskNumber) >>> 0;
     const broadcastNumber = (networkNumber | (~maskNumber >>> 0)) >>> 0;
     const addresses: string[] = [];
@@ -267,7 +290,7 @@ export class DeviceDiscovery {
         socket = TcpSocket.createConnection({ host: ip, port, reuseAddress: true, connectTimeout: CONNECT_TIMEOUT }, () => {
           socket.write(`${discoveryPort ? DISCOVERY_REQUEST : TCP_PROBE}\n`);
         });
-        timer = setTimeout(() => finish(false), CONNECT_TIMEOUT + 300);
+        timer = setTimeout(() => finish(false), CONNECT_TIMEOUT + 500);
         socket.on("data", (data: any) => {
           try {
             responseBuffer += typeof data === "string" ? data : data.toString("utf8");
