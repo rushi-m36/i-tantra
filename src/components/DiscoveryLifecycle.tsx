@@ -13,23 +13,16 @@ interface NsdDevice {
 }
 
 export function DiscoveryLifecycle() {
-  const { callState, discoveryRefreshKey } = useCommunication();
+  const { callState } = useCommunication();
 
   useEffect(() => {
     let active = true;
     let fallbackTimer: ReturnType<typeof setTimeout> | null = null;
     let nsdSubscription: { remove: () => void } | null = null;
 
-    void getDeviceDiscovery().then((discovery) => {
-      if (!active) return;
-
-      const inCall = callState === "calling" || callState === "incoming" || callState === "connected";
-      if (inCall) {
-        discovery.stopDiscovery();
-        NativeModules.NsdDiscovery?.stop?.();
-        return;
-      }
-      if (callState !== "idle") return;
+    const startDiscoveryFlow = async () => {
+      const discovery = await getDeviceDiscovery();
+      if (!active || callState !== "idle") return;
 
       let nsdFoundDevice = false;
       const ownServiceName = `iTantra-${discovery.getDeviceId().slice(-8)}`;
@@ -37,46 +30,72 @@ export function DiscoveryLifecycle() {
       discovery.stopDiscovery();
       discovery.setDiscoveryPhase("nsd");
 
-      nsdSubscription = DeviceEventEmitter.addListener("itantraNsdDeviceFound", (device: NsdDevice) => {
-        if (!active || nsdFoundDevice || !device?.host || device.serviceName === ownServiceName) return;
-
-        nsdFoundDevice = true;
-        discovery.addDevice({
-          id: device.serviceName,
-          name: device.serviceName.replace(/^iTantra-/, "iTantra-"),
-          ip: device.host,
-          port: device.port || TCP_PORT,
-          status: "available",
-          lastSeen: Date.now(),
-        });
-
-        if (fallbackTimer) {
-          clearTimeout(fallbackTimer);
-          fallbackTimer = null;
-        }
-        discovery.stopDiscovery();
-        discovery.setDiscoveryPhase("nsd-found");
-      });
-
       try {
-        NativeModules.NsdDiscovery?.start?.(discovery.getDeviceId(), discovery.getDeviceName(), TCP_PORT);
+        NativeModules.NsdDiscovery?.start?.(
+          discovery.getDeviceId(),
+          discovery.getDeviceName(),
+          TCP_PORT,
+        );
       } catch {}
+
+      nsdSubscription = DeviceEventEmitter.addListener(
+        "itantraNsdDeviceFound",
+        (device: NsdDevice) => {
+          if (!active || nsdFoundDevice || !device?.host || device.serviceName === ownServiceName) return;
+
+          nsdFoundDevice = true;
+          discovery.addDevice({
+            id: device.serviceName,
+            name: device.serviceName,
+            ip: device.host,
+            port: device.port || TCP_PORT,
+            status: "available",
+            lastSeen: Date.now(),
+          });
+
+          if (fallbackTimer) {
+            clearTimeout(fallbackTimer);
+            fallbackTimer = null;
+          }
+
+          discovery.stopDiscovery();
+          discovery.setDiscoveryPhase("nsd-found");
+        },
+      );
 
       fallbackTimer = setTimeout(() => {
         if (!active || nsdFoundDevice) return;
         discovery.setDiscoveryPhase("tcp");
         discovery.startDiscovery();
       }, NSD_FALLBACK_DELAY);
-    });
+    };
+
+    const refreshSubscription = DeviceEventEmitter.addListener(
+      "itantraRefreshDiscovery",
+      () => {
+        if (!active || callState !== "idle") return;
+        void startDiscoveryFlow();
+      },
+    );
+
+    if (callState === "idle") {
+      void startDiscoveryFlow();
+    } else {
+      void getDeviceDiscovery().then((discovery) => {
+        discovery.stopDiscovery();
+        NativeModules.NsdDiscovery?.stop?.();
+      });
+    }
 
     return () => {
       active = false;
       if (fallbackTimer) clearTimeout(fallbackTimer);
       nsdSubscription?.remove();
+      refreshSubscription.remove();
       void getDeviceDiscovery().then((discovery) => discovery.stopDiscovery()).catch(() => {});
       NativeModules.NsdDiscovery?.stop?.();
     };
-  }, [callState, discoveryRefreshKey]);
+  }, [callState]);
 
   return null;
 }
