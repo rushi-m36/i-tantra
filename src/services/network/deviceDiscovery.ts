@@ -1,6 +1,10 @@
 import NetInfo from "@react-native-community/netinfo";
-import { getDeviceName, getUniqueId, getIpAddress } from "react-native-device-info";
 import { NativeModules } from "react-native";
+import {
+  getDeviceName,
+  getIpAddress,
+  getUniqueId,
+} from "react-native-device-info";
 import TcpSocket from "react-native-tcp-socket";
 import { Device } from "../../types/communication";
 
@@ -9,7 +13,7 @@ const TCP_PORT = 5555;
 const SCAN_INTERVAL = 10000;
 const DEVICE_TIMEOUT = 30000;
 const CONNECT_TIMEOUT = 1200;
-const MAX_CONCURRENT_SCANS = 64;
+const MAX_CONCURRENT_SCANS = 4;
 const DISCOVERY_REQUEST = "ITANTRA_DISCOVER_V1";
 const TCP_PROBE = "ITANTRA_PROBE_V1";
 
@@ -36,8 +40,7 @@ export interface ScanStatus {
 }
 
 const LocalNetwork = NativeModules.LocalNetwork as
-  | { getLocalIPv4Addresses?: () => Promise<string[]> }
-  | undefined;
+  { getLocalIPv4Addresses?: () => Promise<string[]> } | undefined;
 
 export class DeviceDiscovery {
   private deviceId: string;
@@ -68,8 +71,7 @@ export class DeviceDiscovery {
         getDeviceName(),
         getUniqueId(),
       ]);
-      this.deviceName =
-        deviceName || `Device-${this.deviceId.substring(0, 8)}`;
+      this.deviceName = deviceName || `Device-${this.deviceId.substring(0, 8)}`;
       if (uniqueId) this.deviceId = uniqueId;
     } catch {
       this.deviceName = `Device-${this.deviceId.substring(0, 8)}`;
@@ -89,8 +91,8 @@ export class DeviceDiscovery {
 
       try {
         if (LocalNetwork?.getLocalIPv4Addresses) {
-          nativeIps = (await LocalNetwork.getLocalIPv4Addresses()).filter((value) =>
-            this.isValidIpv4(value),
+          nativeIps = (await LocalNetwork.getLocalIPv4Addresses()).filter(
+            (value) => this.isValidIpv4(value),
           );
         }
       } catch (error) {
@@ -109,11 +111,7 @@ export class DeviceDiscovery {
           ? details.ipAddress
           : null;
 
-      const privateIps = [
-        ...nativeIps,
-        deviceInfoIp,
-        netInfoIp,
-      ]
+      const privateIps = [...nativeIps, deviceInfoIp, netInfoIp]
         .filter((value): value is string => !!value)
         .filter((value, index, values) => values.indexOf(value) === index)
         .filter((value) => this.isPrivateIpv4(value));
@@ -149,11 +147,7 @@ export class DeviceDiscovery {
   }
 
   private isValidIpv4(ip: string | null | undefined): ip is string {
-    if (
-      !ip ||
-      !/^(?:\d{1,3}\.){3}\d{1,3}$/.test(ip) ||
-      ip === "0.0.0.0"
-    ) {
+    if (!ip || !/^(?:\d{1,3}\.){3}\d{1,3}$/.test(ip) || ip === "0.0.0.0") {
       return false;
     }
     return ip.split(".").every((part) => {
@@ -166,9 +160,7 @@ export class DeviceDiscovery {
     const parts = subnet.split(".").map(Number);
     if (
       parts.length !== 4 ||
-      parts.some(
-        (part) => !Number.isInteger(part) || part < 0 || part > 255,
-      )
+      parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)
     ) {
       return false;
     }
@@ -176,7 +168,7 @@ export class DeviceDiscovery {
     const value = parts.reduce((acc, part) => acc * 256 + part, 0);
     if (value === 0 || value === 0xffffffff) return false;
 
-    const inverted = (~value) >>> 0;
+    const inverted = ~value >>> 0;
     return (inverted & (inverted + 1)) === 0;
   }
 
@@ -184,9 +176,7 @@ export class DeviceDiscovery {
     const parts = ip.split(".").map(Number);
     if (
       parts.length !== 4 ||
-      parts.some(
-        (part) => !Number.isInteger(part) || part < 0 || part > 255,
-      )
+      parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)
     ) {
       return false;
     }
@@ -268,8 +258,7 @@ export class DeviceDiscovery {
 
         socket.on("data", (data: any) => {
           try {
-            buffer +=
-              typeof data === "string" ? data : data.toString("utf8");
+            buffer += typeof data === "string" ? data : data.toString("utf8");
             if (!buffer.includes("\n")) return;
 
             const request = buffer.split("\n")[0].trim();
@@ -423,14 +412,10 @@ export class DeviceDiscovery {
       (ipParts[2] << 8) |
       ipParts[3];
     const maskNumber =
-      ((mask[0] << 24) >>> 0) |
-      (mask[1] << 16) |
-      (mask[2] << 8) |
-      mask[3];
+      ((mask[0] << 24) >>> 0) | (mask[1] << 16) | (mask[2] << 8) | mask[3];
 
     const networkNumber = (ipNumber & maskNumber) >>> 0;
-    const broadcastNumber =
-      (networkNumber | (~maskNumber >>> 0)) >>> 0;
+    const broadcastNumber = (networkNumber | (~maskNumber >>> 0)) >>> 0;
     const start = networkNumber + 1;
     const end = broadcastNumber - 1;
     const addresses: string[] = [];
@@ -455,7 +440,8 @@ export class DeviceDiscovery {
     // The discovery endpoint is purpose-built and returns the device metadata
     // immediately. TCP communication is kept as a compatibility fallback.
     return this.probePort(ip, DISCOVERY_PORT, true).then((found) => {
-      if (!found) return this.probePort(ip, TCP_PORT, false).then(() => undefined);
+      if (!found)
+        return this.probePort(ip, TCP_PORT, false).then(() => undefined);
       return undefined;
     });
   }
@@ -500,10 +486,7 @@ export class DeviceDiscovery {
           },
         );
 
-        timer = setTimeout(
-          () => finish(false),
-          CONNECT_TIMEOUT + 200,
-        );
+        timer = setTimeout(() => finish(false), CONNECT_TIMEOUT + 200);
 
         socket.on("data", (data: any) => {
           try {
@@ -513,9 +496,7 @@ export class DeviceDiscovery {
             if (!line) return;
 
             const response = JSON.parse(line) as DiscoveryResponse;
-            const expectedMagic = discoveryPort
-              ? DISCOVERY_REQUEST
-              : TCP_PROBE;
+            const expectedMagic = discoveryPort ? DISCOVERY_REQUEST : TCP_PROBE;
 
             if (
               response.magic === expectedMagic &&
