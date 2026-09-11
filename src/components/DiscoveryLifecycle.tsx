@@ -18,6 +18,12 @@ export function DiscoveryLifecycle() {
     let active = true;
     let nsdSubscription: { remove: () => void } | null = null;
 
+    const stopDiscovery = async () => {
+      const discovery = await getDeviceDiscovery();
+      discovery.stopDiscovery();
+      NativeModules.NsdDiscovery?.stop?.();
+    };
+
     const startNsdDiscovery = async () => {
       const discovery = await getDeviceDiscovery();
       if (!active || callState !== "idle") return;
@@ -33,7 +39,7 @@ export function DiscoveryLifecycle() {
       nsdSubscription = DeviceEventEmitter.addListener(
         "itantraNsdDeviceFound",
         (device: NsdDevice) => {
-          if (!active || !device?.host || device.serviceName === ownServiceName) return;
+          if (!active || callState !== "idle" || !device?.host || device.serviceName === ownServiceName) return;
 
           discovery.addDevice({
             id: device.serviceName,
@@ -64,18 +70,15 @@ export function DiscoveryLifecycle() {
       },
     );
 
-    if (callState === "idle") {
-      void startNsdDiscovery();
-    } else {
-      void getDeviceDiscovery().then((discovery) => discovery.stopDiscovery());
-      NativeModules.NsdDiscovery?.stop?.();
+    if (callState !== "idle") {
+      void stopDiscovery();
     }
 
     return () => {
       active = false;
       nsdSubscription?.remove();
       refreshSubscription.remove();
-      void getDeviceDiscovery().then((discovery) => discovery.stopDiscovery()).catch(() => {});
+      void stopDiscovery();
       NativeModules.NsdDiscovery?.stop?.();
     };
   }, [callState]);
