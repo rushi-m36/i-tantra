@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useEffect, useState } from "react";
+import React, { createContext, useCallback, useEffect, useRef, useState } from "react";
 import * as Linking from "expo-linking";
 import { DeviceDiscovery, getDeviceDiscovery, ScanStatus } from "../services/network/deviceDiscovery";
 import { TCPService } from "../services/network/tcpService";
@@ -43,6 +43,7 @@ export function CommunicationProvider({ children }: { children: React.ReactNode 
   const [discovery, setDiscovery] = useState<DeviceDiscovery | null>(null);
   const [deviceId, setDeviceId] = useState("");
   const [deviceName, setDeviceName] = useState("");
+  const autoConnecting = useRef(false);
 
   const handleIncomingMessage = useCallback((msg: Message, disc: DeviceDiscovery) => {
     switch (msg.type) {
@@ -80,15 +81,36 @@ export function CommunicationProvider({ children }: { children: React.ReactNode 
         if (!active) return;
         localDiscovery = disc; setDiscovery(disc); setDeviceId(disc.getDeviceId()); setDeviceName(disc.getDeviceName());
         const tcpService = new TCPService(disc.getDeviceId()); localTcp = tcpService; setTcp(tcpService);
-        disc.onDevicesChanged((newDevices) => { if (active) setDevices(newDevices); });
+        disc.onDevicesChanged((newDevices) => {
+          if (!active) return;
+          setDevices(newDevices);
+
+          // Discovery is only the lookup step. Once a device is found, create a
+          // separate persistent communication connection and keep it open.
+          const device = newDevices[0];
+          if (!device?.ip || tcpService.isConnected() || autoConnecting.current) return;
+          autoConnecting.current = true;
+          void tcpService
+            .connectToDevice(device.ip, device.port || TCP_PORT)
+            .then(() => console.log("Persistent connection established for discovered device:", device.name, device.ip, device.port || TCP_PORT))
+            .catch((error) => console.error("Failed to keep discovered device connected:", error))
+            .finally(() => { autoConnecting.current = false; });
+        });
         disc.onScanStatusChanged((status) => { if (active) setScanStatus(status); });
         tcpService.onMessage((msg) => { if (active) handleIncomingMessage(msg, disc); });
-        tcpService.onConnectionChange((connected) => { if (active) setIsConnected(connected); });
-        disc.startDiscovery(); await tcpService.startServer();
+        tcpService.onConnectionChange((connected) => {
+          if (active) setIsConnected(connected);
+          if (!connected) autoConnecting.current = false;
+        });
+
+        // Start the communication server before discovery so an immediate
+        // discovered-device connection always has the local server ready.
+        await tcpService.startServer();
+        disc.startDiscovery();
       } catch (error) { console.error("Failed to initialize communication services:", error); }
     };
     void init();
-    return () => { active = false; void localTcp?.cleanup(); localDiscovery?.cleanup(); };
+    return () => { active = false; autoConnecting.current = false; void localTcp?.cleanup(); localDiscovery?.cleanup(); };
   }, [handleIncomingMessage]);
 
   useEffect(() => {
@@ -111,7 +133,14 @@ export function CommunicationProvider({ children }: { children: React.ReactNode 
   const callDevice = useCallback(async (device: Device) => {
     if (!tcp || !device.ip) return;
     setCurrentDevice(device); setCallState("calling"); setIncomingCallFrom(null);
-    try { await tcp.connectToDevice(device.ip, device.port || TCP_PORT); await tcp.sendMessage({ type: "call_request", senderId: deviceId, senderName: deviceName, timestamp: Date.now() }); }
+    try {
+      // Discovery may already have established the persistent connection.
+      // Reconnect only when the selected device is not the current TCP peer.
+      if (!tcp.isConnectedTo(device.ip, device.port || TCP_PORT)) {
+        await tcp.connectToDevice(device.ip, device.port || TCP_PORT);
+      }
+      await tcp.sendMessage({ type: "call_request", senderId: deviceId, senderName: deviceName, timestamp: Date.now() });
+    }
     catch (error) { console.error("Failed to call device:", error); await tcp.disconnect(); setCallState("idle"); setCurrentDevice(null); }
   }, [tcp, deviceId, deviceName]);
 
