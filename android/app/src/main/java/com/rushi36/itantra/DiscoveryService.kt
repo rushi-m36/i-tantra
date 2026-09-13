@@ -12,10 +12,12 @@ import android.net.nsd.NsdServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.provider.Settings
+import android.util.Log
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.io.OutputStreamWriter
 import java.io.PrintWriter
+import java.net.BindException
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.URLEncoder
@@ -24,6 +26,7 @@ import org.json.JSONObject
 
 class DiscoveryService : Service() {
   companion object {
+    private const val TAG = "iTantraDiscovery"
     private const val CHANNEL_ID = "itantra_discovery"
     private const val CALL_CHANNEL_ID = "itantra_calls"
     private const val NOTIFICATION_ID = 5556
@@ -46,6 +49,7 @@ class DiscoveryService : Service() {
 
   override fun onCreate() {
     super.onCreate()
+    Log.d(TAG, "DiscoveryService created")
     createChannels()
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
       startForeground(NOTIFICATION_ID, serviceNotification(), android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING)
@@ -68,37 +72,63 @@ class DiscoveryService : Service() {
         port = CALL_PORT
       }
       val registration = object : NsdManager.RegistrationListener {
-        override fun onServiceRegistered(info: NsdServiceInfo) {}
-        override fun onRegistrationFailed(info: NsdServiceInfo, errorCode: Int) {}
-        override fun onServiceUnregistered(info: NsdServiceInfo) {}
-        override fun onUnregistrationFailed(info: NsdServiceInfo, errorCode: Int) {}
+        override fun onServiceRegistered(info: NsdServiceInfo) {
+          Log.d(TAG, "NSD registered: ${info.serviceName}")
+        }
+        override fun onRegistrationFailed(info: NsdServiceInfo, errorCode: Int) {
+          Log.e(TAG, "NSD registration failed: $errorCode")
+        }
+        override fun onServiceUnregistered(info: NsdServiceInfo) {
+          Log.d(TAG, "NSD unregistered: ${info.serviceName}")
+        }
+        override fun onUnregistrationFailed(info: NsdServiceInfo, errorCode: Int) {
+          Log.e(TAG, "NSD unregistration failed: $errorCode")
+        }
       }
       nsdRegistration = registration
       nsdManager?.registerService(info, NsdManager.PROTOCOL_DNS_SD, registration)
-    } catch (_: Exception) {}
+    } catch (e: Exception) {
+      Log.e(TAG, "NSD registration exception", e)
+    }
 
     try {
       val discovery = object : NsdManager.DiscoveryListener {
-        override fun onDiscoveryStarted(serviceType: String) {}
-        override fun onDiscoveryStopped(serviceType: String) {}
+        override fun onDiscoveryStarted(serviceType: String) {
+          Log.d(TAG, "NSD discovery started")
+        }
+        override fun onDiscoveryStopped(serviceType: String) {
+          Log.d(TAG, "NSD discovery stopped")
+        }
         override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) {
+          Log.e(TAG, "NSD discovery start failed: $errorCode")
           try { nsdManager?.stopServiceDiscovery(this) } catch (_: Exception) {}
         }
-        override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) {}
+        override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) {
+          Log.e(TAG, "NSD discovery stop failed: $errorCode")
+        }
         override fun onServiceLost(serviceInfo: NsdServiceInfo) {}
         override fun onServiceFound(serviceInfo: NsdServiceInfo) {
           if (nsdStopped || serviceInfo.serviceType != NSD_TYPE || serviceInfo.serviceName == serviceName) return
+          Log.d(TAG, "NSD peer found: ${serviceInfo.serviceName}")
           try {
             nsdManager?.resolveService(serviceInfo, object : NsdManager.ResolveListener {
-              override fun onResolveFailed(info: NsdServiceInfo, errorCode: Int) {}
-              override fun onServiceResolved(info: NsdServiceInfo) {}
+              override fun onResolveFailed(info: NsdServiceInfo, errorCode: Int) {
+                Log.e(TAG, "NSD resolve failed: ${info.serviceName}, $errorCode")
+              }
+              override fun onServiceResolved(info: NsdServiceInfo) {
+                Log.d(TAG, "NSD peer resolved: ${info.serviceName} ${info.host}:${info.port}")
+              }
             })
-          } catch (_: Exception) {}
+          } catch (e: Exception) {
+            Log.e(TAG, "NSD resolve exception", e)
+          }
         }
       }
       nsdDiscovery = discovery
       nsdManager?.discoverServices(NSD_TYPE, NsdManager.PROTOCOL_DNS_SD, discovery)
-    } catch (_: Exception) {}
+    } catch (e: Exception) {
+      Log.e(TAG, "NSD discovery exception", e)
+    }
   }
 
   private fun stopNsd() {
@@ -112,13 +142,31 @@ class DiscoveryService : Service() {
 
   private fun startCallServer() {
     executor.execute {
-      try {
-        callServer = ServerSocket(CALL_PORT)
-        while (!Thread.currentThread().isInterrupted) {
-          val socket = callServer?.accept() ?: break
-          executor.execute { handleCall(socket) }
+      while (!Thread.currentThread().isInterrupted) {
+        try {
+          val server = ServerSocket(CALL_PORT)
+          callServer = server
+          Log.d(TAG, "Background TCP call server listening on port $CALL_PORT")
+          while (!Thread.currentThread().isInterrupted) {
+            val socket = server.accept()
+            Log.d(TAG, "Incoming TCP connection from ${socket.inetAddress.hostAddress}")
+            executor.execute { handleCall(socket) }
+          }
+          break
+        } catch (e: BindException) {
+          callServer = null
+          Log.w(TAG, "Port $CALL_PORT is still in use; retrying background call server")
+          try {
+            Thread.sleep(500)
+          } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+          }
+        } catch (e: Exception) {
+          callServer = null
+          if (!Thread.currentThread().isInterrupted) Log.e(TAG, "Background TCP call server stopped", e)
+          break
         }
-      } catch (_: Exception) {}
+      }
     }
   }
 
@@ -131,23 +179,30 @@ class DiscoveryService : Service() {
       pendingSocket = socket
       pendingIp = socket.inetAddress.hostAddress
       pendingName = message.optString("senderName", "iTantra device")
+      Log.d(TAG, "Incoming call request from ${pendingName} ($pendingIp)")
       showIncomingCallNotification(pendingName ?: "iTantra device")
-    } catch (_: Exception) { try { socket.close() } catch (_: Exception) {} }
+    } catch (e: Exception) {
+      Log.e(TAG, "Failed to handle incoming call", e)
+      try { socket.close() } catch (_: Exception) {}
+    }
   }
 
   private fun showIncomingCallNotification(name: String) {
     val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
     val accept = PendingIntent.getService(this, 1, Intent(this, DiscoveryService::class.java).setAction(ACTION_ACCEPT), flags)
     val reject = PendingIntent.getService(this, 2, Intent(this, DiscoveryService::class.java).setAction(ACTION_REJECT), flags)
-    val notification = Notification.Builder(this, CALL_CHANNEL_ID)
+    val builder = Notification.Builder(this, CALL_CHANNEL_ID)
       .setContentTitle("Incoming iTantra call")
       .setContentText("$name is trying to call you")
       .setSmallIcon(android.R.drawable.sym_action_call)
       .setOngoing(true)
       .addAction(Notification.Action.Builder(null, "Accept", accept).build())
       .addAction(Notification.Action.Builder(null, "Reject", reject).build())
-      .build()
-    getSystemService(NotificationManager::class.java).notify(CALL_NOTIFICATION_ID, notification)
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+      builder.setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
+    }
+    getSystemService(NotificationManager::class.java).notify(CALL_NOTIFICATION_ID, builder.build())
+    Log.d(TAG, "Incoming call notification posted for $name")
   }
 
   private fun acceptCall() {
@@ -190,11 +245,16 @@ class DiscoveryService : Service() {
 
   private fun deviceId(): String = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID) ?: "unknown"
 
-  private fun serviceNotification(): Notification = Notification.Builder(this, CHANNEL_ID)
-    .setContentTitle("iTantra network ready")
-    .setContentText("NSD discovery is running in the background")
-    .setSmallIcon(android.R.drawable.ic_dialog_info)
-    .build()
+  private fun serviceNotification(): Notification {
+    val builder = Notification.Builder(this, CHANNEL_ID)
+      .setContentTitle("iTantra network ready")
+      .setContentText("NSD discovery is running in the background")
+      .setSmallIcon(android.R.drawable.ic_dialog_info)
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+      builder.setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
+    }
+    return builder.build()
+  }
 
   private fun createChannels() {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -213,9 +273,11 @@ class DiscoveryService : Service() {
   }
 
   override fun onDestroy() {
+    Log.d(TAG, "DiscoveryService destroyed")
     stopNsd()
-    executor.shutdownNow()
     try { callServer?.close() } catch (_: Exception) {}
+    callServer = null
+    executor.shutdownNow()
     clearPending()
     super.onDestroy()
   }
