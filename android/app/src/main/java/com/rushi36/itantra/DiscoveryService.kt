@@ -18,6 +18,7 @@ import java.io.InputStreamReader
 import java.io.OutputStreamWriter
 import java.io.PrintWriter
 import java.net.BindException
+import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.URLEncoder
@@ -33,6 +34,9 @@ class DiscoveryService : Service() {
     private const val CALL_NOTIFICATION_ID = 5557
     private const val CALL_PORT = 5555
     private const val NSD_TYPE = "_itantra._tcp."
+    private const val PREFS = "itantra_pending_call"
+    private const val PREF_IP = "ip"
+    private const val PREF_NAME = "name"
     const val ACTION_ACCEPT = "com.rushi36.itantra.ACCEPT_CALL"
     const val ACTION_REJECT = "com.rushi36.itantra.REJECT_CALL"
   }
@@ -54,10 +58,36 @@ class DiscoveryService : Service() {
     Log.d(TAG, "[STAGE 2] Starting foreground service notification")
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) startForeground(NOTIFICATION_ID, serviceNotification(), android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING)
     else startForeground(NOTIFICATION_ID, serviceNotification())
+    restorePendingCall()
     Log.d(TAG, "[STAGE 3] Starting background NSD")
     startNsd()
     Log.d(TAG, "[STAGE 4] Starting background TCP call server on :$CALL_PORT")
     startCallServer()
+  }
+
+  private fun pendingPrefs() = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+
+  private fun restorePendingCall() {
+    val prefs = pendingPrefs()
+    val ip = prefs.getString(PREF_IP, null)
+    val name = prefs.getString(PREF_NAME, null)
+    if (!ip.isNullOrBlank()) {
+      pendingIp = ip
+      pendingName = name ?: "iTantra device"
+      Log.d(TAG, "[CALL RESTORE] Restored pending call ip=$pendingIp name=$pendingName; socket=${pendingSocket != null}")
+    } else {
+      Log.d(TAG, "[CALL RESTORE] No persisted pending call")
+    }
+  }
+
+  private fun persistPendingCall(ip: String, name: String) {
+    pendingPrefs().edit().putString(PREF_IP, ip).putString(PREF_NAME, name).apply()
+    Log.d(TAG, "[CALL STATE] Pending call persisted ip=$ip name=$name")
+  }
+
+  private fun clearPersistedPendingCall() {
+    pendingPrefs().edit().clear().apply()
+    Log.d(TAG, "[CALL STATE] Persisted pending call cleared")
   }
 
   private fun startNsd() {
@@ -76,7 +106,6 @@ class DiscoveryService : Service() {
       nsdRegistration = registration
       nsdManager?.registerService(info, NsdManager.PROTOCOL_DNS_SD, registration)
     } catch (e: Exception) { Log.e(TAG, "[NSD] Registration exception", e) }
-
     try {
       val discovery = object : NsdManager.DiscoveryListener {
         override fun onDiscoveryStarted(serviceType: String) { Log.d(TAG, "[NSD] DISCOVERY STARTED type=$serviceType") }
@@ -149,7 +178,8 @@ class DiscoveryService : Service() {
       pendingSocket = socket
       pendingIp = socket.inetAddress.hostAddress
       pendingName = message.optString("senderName", "iTantra device")
-      Log.d(TAG, "[CALL] INCOMING CALL stored name=$pendingName ip=$pendingIp")
+      persistPendingCall(pendingIp ?: "", pendingName ?: "iTantra device")
+      Log.d(TAG, "[CALL] INCOMING CALL stored name=$pendingName ip=$pendingIp socketClosed=${socket.isClosed}")
       showIncomingCallNotification(pendingName ?: "iTantra device")
     } catch (e: Exception) {
       Log.e(TAG, "[CALL] Failed to handle incoming call", e)
@@ -160,8 +190,8 @@ class DiscoveryService : Service() {
   private fun showIncomingCallNotification(name: String) {
     Log.d(TAG, "[NOTIFICATION] Creating incoming call notification for name=$name")
     val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-    val acceptIntent = Intent(this, DiscoveryService::class.java).setAction(ACTION_ACCEPT)
-    val rejectIntent = Intent(this, DiscoveryService::class.java).setAction(ACTION_REJECT)
+    val acceptIntent = Intent(this, DiscoveryService::class.java).apply { action = ACTION_ACCEPT; setPackage(packageName) }
+    val rejectIntent = Intent(this, DiscoveryService::class.java).apply { action = ACTION_REJECT; setPackage(packageName) }
     val accept = PendingIntent.getService(this, 1, acceptIntent, flags)
     val reject = PendingIntent.getService(this, 2, rejectIntent, flags)
     val builder = Notification.Builder(this, CALL_CHANNEL_ID)
@@ -173,29 +203,54 @@ class DiscoveryService : Service() {
       .addAction(Notification.Action.Builder(null, "Reject", reject).build())
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) builder.setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
     getSystemService(NotificationManager::class.java).notify(CALL_NOTIFICATION_ID, builder.build())
-    Log.d(TAG, "[NOTIFICATION] POSTED notificationId=$CALL_NOTIFICATION_ID acceptAction=$ACTION_ACCEPT")
+    Log.d(TAG, "[NOTIFICATION] POSTED id=$CALL_NOTIFICATION_ID acceptAction=$ACTION_ACCEPT")
+  }
+
+  private fun sendCallAccept(ip: String, existingSocket: Socket?): Boolean {
+    val response = JSONObject().put("type", "call_accept").put("senderId", deviceId()).put("timestamp", System.currentTimeMillis()).toString()
+    if (existingSocket != null && !existingSocket.isClosed && existingSocket.isConnected) {
+      try {
+        Log.d(TAG, "[ACCEPT] Sending call_accept on original socket")
+        PrintWriter(OutputStreamWriter(existingSocket.getOutputStream()), true).println(response)
+        Log.d(TAG, "[ACCEPT] call_accept SENT on original socket")
+        return true
+      } catch (e: Exception) {
+        Log.e(TAG, "[ACCEPT] Original socket send failed; falling back to new connection", e)
+      }
+    } else {
+      Log.w(TAG, "[ACCEPT] Original socket unavailable; using fallback connection")
+    }
+    if (ip.isBlank()) { Log.e(TAG, "[ACCEPT] Fallback ABORT: caller IP is blank"); return false }
+    return try {
+      Socket().use { ackSocket ->
+        Log.d(TAG, "[ACCEPT] Fallback connecting to caller $ip:$CALL_PORT")
+        ackSocket.connect(InetSocketAddress(ip, CALL_PORT), 3000)
+        PrintWriter(OutputStreamWriter(ackSocket.getOutputStream()), true).println(response)
+        Log.d(TAG, "[ACCEPT] call_accept SENT on fallback connection")
+      }
+      true
+    } catch (e: Exception) {
+      Log.e(TAG, "[ACCEPT] Fallback call_accept FAILED", e)
+      false
+    }
   }
 
   private fun acceptCall() {
     Log.d(TAG, "[ACCEPT] ===== ACCEPT BUTTON RECEIVED =====")
+    restorePendingCall()
     val socket = pendingSocket
-    if (socket == null) { Log.e(TAG, "[ACCEPT] ABORT: pendingSocket is NULL"); return }
     val ip = pendingIp ?: ""
     val name = pendingName ?: "iTantra device"
-    Log.d(TAG, "[ACCEPT] pending caller ip=$ip name=$name socketClosed=${socket.isClosed}")
-    try {
-      val response = JSONObject().put("type", "call_accept").put("senderId", deviceId()).put("timestamp", System.currentTimeMillis()).toString()
-      Log.d(TAG, "[ACCEPT] Sending call_accept=$response")
-      PrintWriter(OutputStreamWriter(socket.getOutputStream()), true).println(response)
-      Log.d(TAG, "[ACCEPT] call_accept SENT successfully")
-    } catch (e: Exception) { Log.e(TAG, "[ACCEPT] FAILED to send call_accept", e); clearPending(); return }
-
-    Log.d(TAG, "[ACCEPT] Closing background pending socket before handing off to RN")
+    Log.d(TAG, "[ACCEPT] state before ACK ip=$ip name=$name socketPresent=${socket != null} socketClosed=${socket?.isClosed}")
+    if (ip.isBlank()) { Log.e(TAG, "[ACCEPT] ABORT: no pending caller IP"); return }
+    val accepted = sendCallAccept(ip, socket)
+    if (!accepted) { Log.e(TAG, "[ACCEPT] ABORT: could not deliver call_accept; keeping pending state for retry"); return }
+    Log.d(TAG, "[ACCEPT] ACK delivered; now closing temporary background call socket")
     clearPending()
     getSystemService(NotificationManager::class.java).cancel(CALL_NOTIFICATION_ID)
     try { callServer?.close() } catch (e: Exception) { Log.e(TAG, "[ACCEPT] Error closing background call server", e) }
     callServer = null
-
+    clearPersistedPendingCall()
     val encodedName = URLEncoder.encode(name, "UTF-8")
     val uri = "itantra://incoming-call?ip=$ip&name=$encodedName"
     Log.d(TAG, "[ACCEPT] Preparing MainActivity deep link uri=$uri")
@@ -215,13 +270,18 @@ class DiscoveryService : Service() {
 
   private fun rejectCall() {
     Log.d(TAG, "[REJECT] ===== REJECT BUTTON RECEIVED =====")
+    restorePendingCall()
     val socket = pendingSocket
-    if (socket == null) { Log.e(TAG, "[REJECT] ABORT: pendingSocket is NULL"); return }
-    try {
-      PrintWriter(OutputStreamWriter(socket.getOutputStream()), true).println(JSONObject().put("type", "call_reject").put("senderId", deviceId()).put("timestamp", System.currentTimeMillis()).toString())
-      Log.d(TAG, "[REJECT] call_reject SENT")
-    } catch (e: Exception) { Log.e(TAG, "[REJECT] Failed sending rejection", e) }
+    val ip = pendingIp ?: ""
+    Log.d(TAG, "[REJECT] state ip=$ip socketPresent=${socket != null}")
+    if (socket != null && !socket.isClosed) {
+      try {
+        PrintWriter(OutputStreamWriter(socket.getOutputStream()), true).println(JSONObject().put("type", "call_reject").put("senderId", deviceId()).put("timestamp", System.currentTimeMillis()).toString())
+        Log.d(TAG, "[REJECT] call_reject SENT")
+      } catch (e: Exception) { Log.e(TAG, "[REJECT] Failed sending rejection", e) }
+    }
     clearPending()
+    clearPersistedPendingCall()
     getSystemService(NotificationManager::class.java).cancel(CALL_NOTIFICATION_ID)
   }
 
