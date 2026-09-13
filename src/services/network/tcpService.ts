@@ -8,6 +8,8 @@ const TCP_TIMEOUT = 10000;
 const HEARTBEAT_INTERVAL = 5000;
 const TCP_PROBE = "ITANTRA_PROBE_V1";
 const SERVER_RESTART_DELAY = 300;
+const SERVER_BIND_RETRY_DELAY = 500;
+const SERVER_BIND_MAX_RETRIES = 12;
 
 const decodeTcpData = (data: any): string => {
   if (typeof data === "string") return data;
@@ -83,71 +85,105 @@ export class TCPService {
     const startPromise: Promise<number> = new Promise<number>((resolve, reject) => {
       let settled = false;
       let server: any = null;
-      const cleanupStartPromise = () => { if (this.startPromise === startPromise) this.startPromise = null; };
-      try {
-        server = TcpSocket.createServer((socket: any) => {
-          if (typeof socket.setTimeout === "function") socket.setTimeout(0);
-          let isFirstData = true;
-          let probeBuffer = "";
-          let connectionActivated = false;
-          const activateCommunicationSocket = () => {
-            if (connectionActivated) return;
-            connectionActivated = true;
-            this.serverSocket = socket;
-            this.startHeartbeat();
-            this.connectionCallbacks.forEach((cb) => cb(true));
-          };
-          socket.on("data", (data: any) => {
-            try {
-              const dataStr = decodeTcpData(data);
-              if (isFirstData) {
-                probeBuffer += dataStr;
-                const newlineIndex = probeBuffer.indexOf("\n");
-                if (newlineIndex !== -1) {
-                  const firstLine = probeBuffer.slice(0, newlineIndex).trim();
-                  if (firstLine === TCP_PROBE) {
-                    if (!socket.destroyed) {
-                      socket.write(JSON.stringify({ magic: TCP_PROBE, id: this.serverId, name: this.serverId, port: SERVER_PORT }) + "\n", "utf-8", () => {
-                        if (!socket.destroyed) socket.destroy();
-                      });
+      let retryCount = 0;
+      let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+      const cleanupStartPromise = () => {
+        if (retryTimer) {
+          clearTimeout(retryTimer);
+          retryTimer = null;
+        }
+        if (this.startPromise === startPromise) this.startPromise = null;
+      };
+
+      const bindServer = () => {
+        if (settled) return;
+        try {
+          server = TcpSocket.createServer((socket: any) => {
+            if (typeof socket.setTimeout === "function") socket.setTimeout(0);
+            let isFirstData = true;
+            let probeBuffer = "";
+            let connectionActivated = false;
+            const activateCommunicationSocket = () => {
+              if (connectionActivated) return;
+              connectionActivated = true;
+              this.serverSocket = socket;
+              this.startHeartbeat();
+              this.connectionCallbacks.forEach((cb) => cb(true));
+            };
+            socket.on("data", (data: any) => {
+              try {
+                const dataStr = decodeTcpData(data);
+                if (isFirstData) {
+                  probeBuffer += dataStr;
+                  const newlineIndex = probeBuffer.indexOf("\n");
+                  if (newlineIndex !== -1) {
+                    const firstLine = probeBuffer.slice(0, newlineIndex).trim();
+                    if (firstLine === TCP_PROBE) {
+                      if (!socket.destroyed) {
+                        socket.write(JSON.stringify({ magic: TCP_PROBE, id: this.serverId, name: this.serverId, port: SERVER_PORT }) + "\n", "utf-8", () => {
+                          if (!socket.destroyed) socket.destroy();
+                        });
+                      }
+                      return;
                     }
-                    return;
-                  }
-                  isFirstData = false;
-                  probeBuffer = "";
-                  activateCommunicationSocket();
-                } else return;
+                    isFirstData = false;
+                    probeBuffer = "";
+                    activateCommunicationSocket();
+                  } else return;
+                }
+                if (!connectionActivated) return;
+                const { messages } = this.messageProtocol.processData(dataStr);
+                messages.forEach((msg) => this.messageCallbacks.forEach((cb) => cb(msg)));
+              } catch (error) { console.error("Failed to process TCP data:", error); }
+            });
+            socket.on("error", (err: any) => console.error("TCP server socket error:", err));
+            socket.on("close", () => {
+              if (this.serverSocket === socket) this.serverSocket = null;
+              if (connectionActivated && !this.clientSocket) {
+                this.stopHeartbeat();
+                this.connectionCallbacks.forEach((cb) => cb(false));
               }
-              if (!connectionActivated) return;
-              const { messages } = this.messageProtocol.processData(dataStr);
-              messages.forEach((msg) => this.messageCallbacks.forEach((cb) => cb(msg)));
-            } catch (error) { console.error("Failed to process TCP data:", error); }
+            });
           });
-          socket.on("error", (err: any) => console.error("TCP server socket error:", err));
-          socket.on("close", () => {
-            if (this.serverSocket === socket) this.serverSocket = null;
-            if (connectionActivated && !this.clientSocket) {
-              this.stopHeartbeat();
-              this.connectionCallbacks.forEach((cb) => cb(false));
+          this.server = server;
+          server.on("error", (err: any) => {
+            console.error("TCP server error:", err);
+            if (!settled) {
+              this.server = null;
+              if (err?.code === "EADDRINUSE" && retryCount < SERVER_BIND_MAX_RETRIES) {
+                retryCount += 1;
+                console.log(`TCP server: port 5555 busy, retrying bind (${retryCount}/${SERVER_BIND_MAX_RETRIES})`);
+                try { server.close(); } catch {}
+                retryTimer = setTimeout(bindServer, SERVER_BIND_RETRY_DELAY);
+                return;
+              }
+              settled = true;
+              cleanupStartPromise();
+              if (err?.code === "EADDRINUSE") reject(new Error(`TCP port ${SERVER_PORT} is still in use after ${SERVER_BIND_MAX_RETRIES} retries.`));
+              else reject(err);
             }
           });
-        });
-        this.server = server;
-        server.on("error", (err: any) => {
-          console.error("TCP server error:", err);
+          server.on("close", () => { if (this.server === server) this.server = null; });
+          server.listen({ port: SERVER_PORT, host: "0.0.0.0", reuseAddress: true }, () => {
+            if (!settled) {
+              settled = true;
+              cleanupStartPromise();
+              console.log("TCP server: listening on port 5555");
+              resolve(SERVER_PORT);
+            }
+          });
+        } catch (error) {
           if (!settled) {
-            settled = true; this.server = null; cleanupStartPromise();
-            if (err?.code === "EADDRINUSE") reject(new Error(`TCP port ${SERVER_PORT} is already in use. The background service may still be releasing it.`));
-            else reject(err);
+            settled = true;
+            this.server = null;
+            cleanupStartPromise();
+            reject(error);
           }
-        });
-        server.on("close", () => { if (this.server === server) this.server = null; });
-        server.listen({ port: SERVER_PORT, host: "0.0.0.0", reuseAddress: true }, () => {
-          if (!settled) { settled = true; cleanupStartPromise(); resolve(SERVER_PORT); }
-        });
-      } catch (error) {
-        if (!settled) { settled = true; this.server = null; cleanupStartPromise(); reject(error); }
-      }
+        }
+      };
+
+      bindServer();
     });
     this.startPromise = startPromise;
     return startPromise;
