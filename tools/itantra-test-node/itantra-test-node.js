@@ -66,7 +66,6 @@ function handleData(data) {
 }
 
 function attachSocket(newSocket) {
-  if (socket && socket !== newSocket && !socket.destroyed) socket.destroy();
   socket = newSocket;
   buffer = '';
   connectedPeer = `${newSocket.remoteAddress}:${newSocket.remotePort}`;
@@ -76,7 +75,11 @@ function attachSocket(newSocket) {
   newSocket.on('data', handleData);
   newSocket.on('error', error => console.log(`\nSocket error: ${error.message}`));
   newSocket.on('close', () => {
-    if (socket === newSocket) { socket = null; connectedPeer = null; buffer = ''; }
+    if (socket === newSocket) {
+      socket = null;
+      connectedPeer = null;
+      buffer = '';
+    }
     console.log('\nConnection closed.');
     prompt();
   });
@@ -84,8 +87,19 @@ function attachSocket(newSocket) {
 
 function startServer() {
   if (server) { console.log(`TCP server already running on :${PORT}.`); return; }
-  server = net.createServer(attachSocket);
+  server = net.createServer((newSocket) => {
+    // Keep the existing connection when the phone is already connected and
+    // sends another connection attempt. This prevents the test node from
+    // destroying the real call connection during NSD auto-connect testing.
+    if (socket && !socket.destroyed && socket.remoteAddress === newSocket.remoteAddress) {
+      console.log(`\nIgnoring duplicate connection from ${newSocket.remoteAddress}; existing connection is active.`);
+      newSocket.destroy();
+      return;
+    }
+    attachSocket(newSocket);
+  });
   server.on('error', error => console.error(`\nTCP server error: ${error.message}`));
+  server.on('close', () => { server = null; });
   server.listen(PORT, '0.0.0.0', () => {
     console.log(`\nTCP server listening on :${PORT}`);
     console.log('Waiting for iTantra connections...');
@@ -165,8 +179,18 @@ function stopMdns() {
 
 function connectToPhone(host) {
   if (!host) { console.log('Usage: connect <phone-ip>'); return; }
-  if (socket && !socket.destroyed) socket.destroy();
-  const client = net.createConnection({ host, port: PORT, timeout: 10000 }, () => { client.setTimeout(0); attachSocket(client); });
+
+  // NSD can already cause the phone to open the laptop's TCP server. Reuse
+  // that connection instead of opening a second connection to the same phone.
+  if (socket && !socket.destroyed && socket.remoteAddress === host) {
+    console.log(`\nAlready connected to ${host}:${PORT}; reusing existing connection.`);
+    return;
+  }
+
+  const client = net.createConnection({ host, port: PORT, timeout: 10000 }, () => {
+    client.setTimeout(0);
+    attachSocket(client);
+  });
   client.on('timeout', () => { console.log('\nConnection timed out.'); client.destroy(); });
   client.on('error', error => { console.log(`\nCould not connect to ${host}:${PORT}: ${error.message}`); prompt(); });
 }
