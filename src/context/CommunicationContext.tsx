@@ -14,14 +14,13 @@ const INCOMING_CALL_DEDUPE_MS = 30000;
 const handledIncomingCallUrls = new Map<string, number>();
 const generateUUID: () => string = () => "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, c => { const r = (Math.random() * 16) | 0; const v = c === "x" ? r : (r & 3) | 8; return v.toString(16); });
 
-async function connectWithRetry(service: TCPService, ip: string, port: number, label: string): Promise<void> {
+async function connectWithRetry(service: TCPService, ip: string, port: number): Promise<void> {
   let lastError: unknown = null;
   for (let attempt = 1; attempt <= RECONNECT_ATTEMPTS; attempt++) {
-    console.log(`[CALL RETRY] ${label} attempt ${attempt}/${RECONNECT_ATTEMPTS} -> ${ip}:${port}`);
-    try { await service.connectToDevice(ip, port); console.log(`[CALL RETRY] ${label} SUCCESS on attempt ${attempt}`); return; }
-    catch (error) { lastError = error; console.error(`[CALL RETRY] ${label} FAILED attempt ${attempt}`, error); if (attempt < RECONNECT_ATTEMPTS) await new Promise(resolve => setTimeout(resolve, RECONNECT_DELAY + (attempt - 1) * 100)); }
+    try { await service.connectToDevice(ip, port); return; }
+    catch (error) { lastError = error; if (attempt < RECONNECT_ATTEMPTS) await new Promise(resolve => setTimeout(resolve, RECONNECT_DELAY + (attempt - 1) * 100)); }
   }
-  throw lastError instanceof Error ? lastError : new Error(`TCP reconnect failed: ${label}`);
+  throw lastError instanceof Error ? lastError : new Error("TCP reconnect failed");
 }
 
 interface CommunicationContextType {
@@ -52,10 +51,9 @@ export function CommunicationProvider({ children }: { children: React.ReactNode 
   useEffect(() => { callStateRef.current = callState; }, [callState]);
 
   const handleIncomingMessage = useCallback(async (msg: Message, disc: DeviceDiscovery) => {
-    console.log(`[CALL FLOW 10] RN received TCP message type=${msg.type}`);
     switch (msg.type) {
-      case "call_request": { const callReq = msg as CallRequestMessage; const caller: Device = { id: callReq.senderId, name: callReq.senderName, ip: "", port: TCP_PORT, status: "calling", lastSeen: Date.now() }; currentDeviceRef.current = caller; setIncomingCallFrom(caller); setCurrentDevice(caller); setCallState("incoming"); console.log(`[CALL FLOW 11] call_request sender=${callReq.senderName} id=${callReq.senderId}`); break; }
-      case "call_accept": { setCallState("connected"); setIncomingCallFrom(null); setMessages([]); const peer = currentDeviceRef.current; const service = tcpRef.current; console.log(`[CALL FLOW 21] caller peer=${JSON.stringify(peer)} tcp=${!!service}`); if (peer?.ip && service) { try { await new Promise(resolve => setTimeout(resolve, 300)); await connectWithRetry(service, peer.ip, peer.port || TCP_PORT, "caller reconnect"); } catch (error) { console.error("[CALL FLOW 24] caller reconnect FAILED after retries", error); setCallState("disconnected"); } } break; }
+      case "call_request": { const callReq = msg as CallRequestMessage; const caller: Device = { id: callReq.senderId, name: callReq.senderName, ip: "", port: TCP_PORT, status: "calling", lastSeen: Date.now() }; currentDeviceRef.current = caller; setIncomingCallFrom(caller); setCurrentDevice(caller); setCallState("incoming"); break; }
+      case "call_accept": { setCallState("connected"); setIncomingCallFrom(null); setMessages([]); const peer = currentDeviceRef.current; const service = tcpRef.current; if (peer?.ip && service) { try { await new Promise(resolve => setTimeout(resolve, 300)); await connectWithRetry(service, peer.ip, peer.port || TCP_PORT); } catch { setCallState("disconnected"); } } break; }
       case "call_reject": setCallState("rejected"); setIncomingCallFrom(null); setTimeout(() => { setCallState("idle"); setCurrentDevice(null); currentDeviceRef.current = null; }, 1500); break;
       case "speech_message": { const speechMsg = msg as SpeechMessage; const incomingText = typeof speechMsg.text === "string" ? speechMsg.text : String(speechMsg.text ?? ""); const senderName = speechMsg.senderId === disc.getDeviceId() ? "You (loopback)" : "Remote device"; const chatMsg: ChatMessage = { id: speechMsg.id, senderId: speechMsg.senderId, senderName, text: incomingText, timestamp: speechMsg.timestamp }; setMessages(prev => prev.some(item => item.id === chatMsg.id) ? prev : [...prev, chatMsg]); void getTextToSpeechService().speak(incomingText); break; }
       case "call_end": setCallState("idle"); setCurrentDevice(null); currentDeviceRef.current = null; setIncomingCallFrom(null); setMessages([]); break;
@@ -66,16 +64,15 @@ export function CommunicationProvider({ children }: { children: React.ReactNode 
   useEffect(() => {
     let active = true; let localTcp: TCPService | null = null; let localDiscovery: DeviceDiscovery | null = null;
     const init = async () => {
-      console.log("[CALL FLOW 01] CommunicationProvider init START");
       try {
         const disc = await getDeviceDiscovery(); if (!active) return; localDiscovery = disc; setDeviceId(disc.getDeviceId()); setDeviceName(disc.getDeviceName());
-        const tcpService = new TCPService(disc.getDeviceId()); localTcp = tcpService; tcpRef.current = tcpService; setTcp(tcpService); console.log("[CALL FLOW 03] TCPService created");
+        const tcpService = new TCPService(disc.getDeviceId()); localTcp = tcpService; tcpRef.current = tcpService; setTcp(tcpService);
         disc.onDevicesChanged(newDevices => { if (!active) return; setDevices(newDevices); if (callStateRef.current !== "idle") return; const device = newDevices[0]; if (!device?.ip || tcpService.isConnected() || autoConnecting.current) return; autoConnecting.current = true; void tcpService.connectToDevice(device.ip, device.port || TCP_PORT).finally(() => { autoConnecting.current = false; }); });
         disc.onScanStatusChanged(status => { if (active) setScanStatus(status); });
         tcpService.onMessage(msg => { if (active) void handleIncomingMessage(msg, disc); });
         tcpService.onConnectionChange(connected => { if (active) setIsConnected(connected); if (!connected) autoConnecting.current = false; });
         await tcpService.startServer(); if (!active) { await tcpService.cleanup(); return; } setDiscovery(disc);
-      } catch (error) { console.error("[CALL FLOW ERROR] CommunicationProvider init FAILED", error); }
+      } catch (error) { console.error("CommunicationProvider initialization failed", error); }
     };
     void init();
     return () => { active = false; autoConnecting.current = false; if (tcpRef.current === localTcp) tcpRef.current = null; void localTcp?.cleanup(); localDiscovery?.cleanup(); };
@@ -86,45 +83,38 @@ export function CommunicationProvider({ children }: { children: React.ReactNode 
   useEffect(() => {
     let active = true;
     const handleUrl = async (url: string | null) => {
-      if (!active) { console.log("[CALL FLOW 29] Ignoring URL from inactive provider"); return; }
-      console.log(`[CALL FLOW 30] handleUrl invoked url=${url}`);
-      if (!url || !url.startsWith("itantra://incoming-call")) { console.log("[CALL FLOW 31] URL ignored"); return; }
+      if (!active || !url || !url.startsWith("itantra://incoming-call")) return;
       const now = Date.now();
       const previousHandledAt = handledIncomingCallUrls.get(url);
-      if (previousHandledAt && now - previousHandledAt < INCOMING_CALL_DEDUPE_MS) { console.log(`[CALL FLOW 31] URL ignored: already handled ${now - previousHandledAt}ms ago`); return; }
+      if (previousHandledAt && now - previousHandledAt < INCOMING_CALL_DEDUPE_MS) return;
       const parsed = Linking.parse(url); const ip = typeof parsed.queryParams?.ip === "string" ? parsed.queryParams.ip : ""; const name = typeof parsed.queryParams?.name === "string" ? parsed.queryParams.name : "iTantra device";
       if (!ip) return;
       const remote: Device = { id: `remote-${ip}`, name, ip, port: TCP_PORT, status: "connected", lastSeen: Date.now() };
       try {
         if (!active) return;
         autoConnecting.current = true; currentDeviceRef.current = remote; callStateRef.current = "calling"; setCurrentDevice(remote); setIncomingCallFrom(null); setMessages([]); setCallState("calling");
-        console.log("[CALL FLOW 35] state=calling; navigating /communication");
         router.replace("/communication");
-        // Navigation can remount CommunicationProvider. Do not claim the URL is handled
-        // until the reconnect succeeds, so the new provider can take over via getInitialURL().
         await new Promise(resolve => setTimeout(resolve, 300));
-        if (!active) { console.log("[CALL FLOW 36] provider became inactive during handoff; new provider may take over"); return; }
+        if (!active) return;
         const reconnectService = tcpRef.current;
-        console.log(`[CALL FLOW 37] reconnect service available=${!!reconnectService} providerTcpChanged=${reconnectService !== tcp}`);
         if (!reconnectService) throw new Error("TCPService unavailable after communication screen handoff");
-        await connectWithRetry(reconnectService, ip, TCP_PORT, "callee reconnect");
+        await connectWithRetry(reconnectService, ip, TCP_PORT);
         if (!active) return;
         handledIncomingCallUrls.set(url, Date.now());
-        setCallState("connected"); callStateRef.current = "connected"; console.log("[CALL FLOW 39] state=connected");
+        setCallState("connected"); callStateRef.current = "connected";
       } catch (error) {
         if (!active) return;
-        console.error("[CALL FLOW 40] callee handoff/reconnect FAILED after retries", error); setCallState("disconnected"); callStateRef.current = "disconnected"; handledIncomingCallUrls.delete(url);
-      } finally { autoConnecting.current = false; if (active) console.log("[CALL FLOW 41] deep-link handler FINISHED"); }
+        setCallState("disconnected"); callStateRef.current = "disconnected"; handledIncomingCallUrls.delete(url);
+      } finally { autoConnecting.current = false; }
     };
-    console.log("[CALL FLOW 29] Registering Expo Linking handlers");
-    const initialUrlPromise = Linking.getInitialURL().then(handleUrl).catch(error => { if (active) console.error("[CALL FLOW 32] getInitialURL FAILED", error); });
+    const initialUrlPromise = Linking.getInitialURL().then(handleUrl).catch(error => { if (active) console.error("getInitialURL failed", error); });
     const subscription = Linking.addEventListener("url", ({ url }) => { void handleUrl(url); });
     return () => { active = false; subscription.remove(); void initialUrlPromise; };
   }, [tcp]);
 
-  const callDevice = useCallback(async (device: Device) => { if (!tcp || !device.ip) return; currentDeviceRef.current = device; setCurrentDevice(device); setCallState("calling"); setIncomingCallFrom(null); try { if (!tcp.isConnectedTo(device.ip, device.port || TCP_PORT)) await tcp.connectToDevice(device.ip, device.port || TCP_PORT); await tcp.sendMessage({ type: "call_request", senderId: deviceId, senderName: deviceName, timestamp: Date.now() }); } catch (error) { console.error("[CALL FLOW OUTGOING] FAILED", error); await tcp.disconnect(); setCallState("idle"); setCurrentDevice(null); currentDeviceRef.current = null; } }, [tcp, deviceId, deviceName]);
+  const callDevice = useCallback(async (device: Device) => { if (!tcp || !device.ip) return; currentDeviceRef.current = device; setCurrentDevice(device); setCallState("calling"); setIncomingCallFrom(null); try { if (!tcp.isConnectedTo(device.ip, device.port || TCP_PORT)) await tcp.connectToDevice(device.ip, device.port || TCP_PORT); await tcp.sendMessage({ type: "call_request", senderId: deviceId, senderName: deviceName, timestamp: Date.now() }); } catch { await tcp.disconnect(); setCallState("idle"); setCurrentDevice(null); currentDeviceRef.current = null; } }, [tcp, deviceId, deviceName]);
   const cancelCall = useCallback(async () => { if (!tcp) return; try { if (tcp.isConnected()) await tcp.sendMessage({ type: "call_end", senderId: deviceId, timestamp: Date.now() }); } catch {} await tcp.disconnect(); setCallState("idle"); setCurrentDevice(null); currentDeviceRef.current = null; setIncomingCallFrom(null); }, [tcp, deviceId]);
-  const acceptCall = useCallback(async () => { if (!tcp || !incomingCallFrom) return; try { await tcp.sendMessage({ type: "call_accept", senderId: deviceId, timestamp: Date.now() }); setCallState("connected"); setCurrentDevice(incomingCallFrom); currentDeviceRef.current = incomingCallFrom; setIncomingCallFrom(null); setMessages([]); } catch (error) { console.error("[CALL FLOW INCOMING] acceptCall FAILED", error); } }, [tcp, incomingCallFrom, deviceId]);
+  const acceptCall = useCallback(async () => { if (!tcp || !incomingCallFrom) return; try { await tcp.sendMessage({ type: "call_accept", senderId: deviceId, timestamp: Date.now() }); setCallState("connected"); setCurrentDevice(incomingCallFrom); currentDeviceRef.current = incomingCallFrom; setIncomingCallFrom(null); setMessages([]); } catch {} }, [tcp, incomingCallFrom, deviceId]);
   const rejectCall = useCallback(async () => { if (!tcp || !incomingCallFrom) return; try { await tcp.sendMessage({ type: "call_reject", senderId: deviceId, timestamp: Date.now() }); } catch {} await tcp.disconnect(); setCallState("idle"); setIncomingCallFrom(null); setCurrentDevice(null); currentDeviceRef.current = null; }, [tcp, incomingCallFrom, deviceId]);
   const endCall = useCallback(async () => { if (!tcp) return; try { if (tcp.isConnected()) await tcp.sendMessage({ type: "call_end", senderId: deviceId, timestamp: Date.now() }); } catch {} await tcp.disconnect(); setCallState("idle"); setCurrentDevice(null); currentDeviceRef.current = null; setIncomingCallFrom(null); setMessages([]); }, [tcp, deviceId]);
   const refreshDiscovery = useCallback(() => { setDevices([]); setRefreshVersion(value => value + 1); }, []);
