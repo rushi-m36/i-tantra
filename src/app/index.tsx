@@ -1,3 +1,5 @@
+import { useEffect } from "react";
+import { useRouter } from "expo-router";
 import { DeviceEventEmitter, Text, TouchableOpacity, View } from "react-native";
 import "../../global.css";
 import { BottomNav } from "../components/BottomNav";
@@ -6,7 +8,14 @@ import { useCommunication } from "../context/CommunicationContext";
 import AvailableDevicesScreen from "../screens/AvailableDevicesScreen";
 
 export default function App() {
+  const router = useRouter();
   const { callState, scanStatus, refreshDiscovery } = useCommunication();
+
+  useEffect(() => {
+    if (callState === "connected") {
+      router.replace("/communication");
+    }
+  }, [callState, router]);
 
   const handleStartScanning = () => {
     if (scanStatus.scanning || callState !== "idle") return;
