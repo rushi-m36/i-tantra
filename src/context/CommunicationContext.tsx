@@ -12,7 +12,7 @@ const RECONNECT_ATTEMPTS = 12;
 const RECONNECT_DELAY = 400;
 const INCOMING_CALL_DEDUPE_MS = 30000;
 const handledIncomingCallUrls = new Map<string, number>();
-const generateUUID = (): string => "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, c => { const r = (Math.random() * 16) | 0; const v = c === "x" ? r : (r & 3) | 8; return v.toString(16); });
+const generateUUID: () => string = () => "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, c => { const r = (Math.random() * 16) | 0; const v = c === "x" ? r : (r & 3) | 8; return v.toString(16); });
 
 async function connectWithRetry(service: TCPService, ip: string, port: number, label: string): Promise<void> {
   let lastError: unknown = null;
@@ -125,4 +125,10 @@ export function CommunicationProvider({ children }: { children: React.ReactNode 
   const stopSpeechRecognition = useCallback(async () => { await getSpeechToTextService().stopListening(); }, []);
   const cleanup = useCallback(async () => { await tcp?.cleanup(); discovery?.cleanup(); await getSpeechToTextService().cleanup(); await getTextToSpeechService().cleanup(); }, [tcp, discovery]);
   return <CommunicationContext.Provider value={{ devices, scanStatus, callState, messages, currentDevice, localDeviceId: deviceId, localDeviceName: deviceName, isConnected, incomingCallFrom, callDevice, cancelCall, acceptCall, rejectCall, endCall, refreshDiscovery, sendMessage, startSpeechRecognition, stopSpeechRecognition, cleanup }}>{children}</CommunicationContext.Provider>;
+}
+
+export function useCommunication() {
+  const context = React.useContext(CommunicationContext);
+  if (!context) throw new Error("useCommunication must be used within CommunicationProvider");
+  return context;
 }
