@@ -1,3 +1,4 @@
+import { AppState, type AppStateStatus } from "react-native";
 import TcpSocket from "react-native-tcp-socket";
 import { Message } from "../../types/communication";
 import { MessageProtocol } from "./messageProtocol";
@@ -6,6 +7,7 @@ const SERVER_PORT = 5555;
 const TCP_TIMEOUT = 10000;
 const HEARTBEAT_INTERVAL = 5000;
 const TCP_PROBE = "ITANTRA_PROBE_V1";
+const SERVER_RESTART_DELAY = 300;
 
 const decodeTcpData = (data: any): string => {
   if (typeof data === "string") return data;
@@ -29,8 +31,29 @@ export class TCPService {
   private server: any = null;
   private startPromise: Promise<number> | null = null;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  private appStateSubscription: { remove: () => void } | null = null;
+  private serverRestartTimer: ReturnType<typeof setTimeout> | null = null;
 
-  constructor(serverId: string) { this.serverId = serverId; }
+  constructor(serverId: string) {
+    this.serverId = serverId;
+    this.appStateSubscription = AppState.addEventListener("change", (state: AppStateStatus) => {
+      if (state === "background") {
+        console.log("TCP server: releasing port 5555 for background service");
+        if (this.serverRestartTimer) {
+          clearTimeout(this.serverRestartTimer);
+          this.serverRestartTimer = null;
+        }
+        void this.stopServer();
+      } else if (state === "active") {
+        if (this.serverRestartTimer) clearTimeout(this.serverRestartTimer);
+        this.serverRestartTimer = setTimeout(() => {
+          this.serverRestartTimer = null;
+          console.log("TCP server: reclaiming port 5555 for foreground app");
+          void this.startServer().catch((error) => console.error("TCP server restart failed:", error));
+        }, SERVER_RESTART_DELAY);
+      }
+    });
+  }
 
   private getActiveSocket(): any | null {
     const socket = this.clientSocket || this.serverSocket;
@@ -67,7 +90,6 @@ export class TCPService {
           let isFirstData = true;
           let probeBuffer = "";
           let connectionActivated = false;
-          let buffer = "";
           const activateCommunicationSocket = () => {
             if (connectionActivated) return;
             connectionActivated = true;
@@ -97,7 +119,6 @@ export class TCPService {
                 } else return;
               }
               if (!connectionActivated) return;
-              buffer += dataStr;
               const { messages } = this.messageProtocol.processData(dataStr);
               messages.forEach((msg) => this.messageCallbacks.forEach((cb) => cb(msg)));
             } catch (error) { console.error("Failed to process TCP data:", error); }
@@ -116,7 +137,7 @@ export class TCPService {
           console.error("TCP server error:", err);
           if (!settled) {
             settled = true; this.server = null; cleanupStartPromise();
-            if (err?.code === "EADDRINUSE") reject(new Error(`TCP port ${SERVER_PORT} is already in use. The previous app instance may still be running. Stop/restart the development build and try again.`));
+            if (err?.code === "EADDRINUSE") reject(new Error(`TCP port ${SERVER_PORT} is already in use. The background service may still be releasing it.`));
             else reject(err);
           }
         });
@@ -139,9 +160,6 @@ export class TCPService {
       try {
         const options: any = { host: ip, port, reuseAddress: true, connectTimeout: TCP_TIMEOUT };
         if (ip === "127.0.0.1" || ip === "localhost") options.localAddress = "127.0.0.1";
-        // Do not force an Android interface name. Hotspot routing can expose a
-        // private IPv4 address while the underlying interface is not named
-        // "wifi". Let Android select the route for the destination.
         const socket = TcpSocket.createConnection(options, () => {
           if (settled) return;
           settled = true;
@@ -211,6 +229,9 @@ export class TCPService {
 
   async cleanup(): Promise<void> {
     this.stopHeartbeat();
+    if (this.serverRestartTimer) { clearTimeout(this.serverRestartTimer); this.serverRestartTimer = null; }
+    this.appStateSubscription?.remove();
+    this.appStateSubscription = null;
     await this.disconnect();
     await this.stopServer();
     this.messageCallbacks = [];
