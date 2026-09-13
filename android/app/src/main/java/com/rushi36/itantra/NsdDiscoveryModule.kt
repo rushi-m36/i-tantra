@@ -24,9 +24,11 @@ class NsdDiscoveryModule(private val reactContext: ReactApplicationContext) : Re
     stop()
     stopped = false
 
+    val ownServiceName = "iTantra-${deviceId.takeLast(8)}"
+
     try {
       val serviceInfo = NsdServiceInfo().apply {
-        serviceName = "iTantra-${deviceId.takeLast(8)}"
+        serviceName = ownServiceName
         serviceType = this@NsdDiscoveryModule.serviceType
         this.port = port
       }
@@ -55,11 +57,15 @@ class NsdDiscoveryModule(private val reactContext: ReactApplicationContext) : Re
 
         override fun onServiceFound(serviceInfo: NsdServiceInfo) {
           if (stopped) return
+          val ownName = registeredServiceName ?: ownServiceName
+          if (serviceInfo.serviceType != serviceType || serviceInfo.serviceName == ownName) return
           try {
             nsdManager.resolveService(serviceInfo, object : NsdManager.ResolveListener {
               override fun onResolveFailed(info: NsdServiceInfo, errorCode: Int) {}
               override fun onServiceResolved(info: NsdServiceInfo) {
                 if (stopped) return
+                val resolvedOwnName = registeredServiceName ?: ownServiceName
+                if (info.serviceName == resolvedOwnName) return
                 val host = info.host?.hostAddress ?: return
                 if (info.port <= 0) return
                 val params = Arguments.createMap().apply {
