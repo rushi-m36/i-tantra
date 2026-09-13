@@ -92,19 +92,30 @@ export function CommunicationProvider({ children }: { children: React.ReactNode 
       const remote: Device = { id: `remote-${ip}`, name, ip, port: TCP_PORT, status: "connected", lastSeen: Date.now() };
       try {
         if (!active) return;
-        autoConnecting.current = true; currentDeviceRef.current = remote; callStateRef.current = "calling"; setCurrentDevice(remote); setIncomingCallFrom(null); setMessages([]); setCallState("calling");
-        router.replace("/communication");
+        autoConnecting.current = true;
+        currentDeviceRef.current = remote;
+        callStateRef.current = "calling";
+        setCurrentDevice(remote);
+        setIncomingCallFrom(null);
+        setMessages([]);
+        setCallState("calling");
+
         await new Promise(resolve => setTimeout(resolve, 300));
         if (!active) return;
         const reconnectService = tcpRef.current;
-        if (!reconnectService) throw new Error("TCPService unavailable after communication screen handoff");
+        if (!reconnectService) throw new Error("TCPService unavailable after notification handoff");
         await connectWithRetry(reconnectService, ip, TCP_PORT);
         if (!active) return;
+
         handledIncomingCallUrls.set(url, Date.now());
-        setCallState("connected"); callStateRef.current = "connected";
+        setCallState("connected");
+        callStateRef.current = "connected";
+        router.replace("/communication");
       } catch (error) {
         if (!active) return;
-        setCallState("disconnected"); callStateRef.current = "disconnected"; handledIncomingCallUrls.delete(url);
+        setCallState("disconnected");
+        callStateRef.current = "disconnected";
+        handledIncomingCallUrls.delete(url);
       } finally { autoConnecting.current = false; }
     };
     const initialUrlPromise = Linking.getInitialURL().then(handleUrl).catch(error => { if (active) console.error("getInitialURL failed", error); });
