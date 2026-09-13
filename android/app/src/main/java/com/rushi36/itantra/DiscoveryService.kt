@@ -39,6 +39,16 @@ class DiscoveryService : Service() {
     private const val PREF_NAME = "name"
     const val ACTION_ACCEPT = "com.rushi36.itantra.ACCEPT_CALL"
     const val ACTION_REJECT = "com.rushi36.itantra.REJECT_CALL"
+    const val EXTRA_NOTIFICATION_ACCEPT = "com.rushi36.itantra.NOTIFICATION_ACCEPT"
+
+    @Volatile
+    private var instance: DiscoveryService? = null
+
+    fun acceptCallFromActivity(): Boolean {
+      val service = instance
+      Log.d(TAG, "[ACCEPT ACTIVITY] acceptCallFromActivity() servicePresent=${service != null}")
+      return service?.acceptCall(false) ?: false
+    }
   }
 
   private val executor = Executors.newCachedThreadPool()
@@ -53,7 +63,8 @@ class DiscoveryService : Service() {
 
   override fun onCreate() {
     super.onCreate()
-    Log.d(TAG, "[STAGE 1] DiscoveryService.onCreate()")
+    instance = this
+    Log.d(TAG, "[STAGE 1] DiscoveryService.onCreate() instance registered")
     createChannels()
     Log.d(TAG, "[STAGE 2] Starting foreground service notification")
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) startForeground(NOTIFICATION_ID, serviceNotification(), android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING)
@@ -188,12 +199,23 @@ class DiscoveryService : Service() {
   }
 
   private fun showIncomingCallNotification(name: String) {
-    Log.d(TAG, "[NOTIFICATION] Creating incoming call notification for name=$name")
+    Log.d(TAG, "[NOTIFICATION] Creating incoming call notification for name=$name ip=$pendingIp")
     val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-    val acceptIntent = Intent(this, DiscoveryService::class.java).apply { action = ACTION_ACCEPT; setPackage(packageName) }
+    val encodedName = URLEncoder.encode(name, "UTF-8")
+    val uri = "itantra://incoming-call?ip=${pendingIp ?: ""}&name=$encodedName"
+
+    val acceptActivityIntent = Intent(this, MainActivity::class.java).apply {
+      action = Intent.ACTION_VIEW
+      data = android.net.Uri.parse(uri)
+      putExtra(EXTRA_NOTIFICATION_ACCEPT, true)
+      addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+    }
+    Log.d(TAG, "[NOTIFICATION] Accept PendingIntent targets MainActivity directly uri=$uri")
+    val accept = PendingIntent.getActivity(this, 1, acceptActivityIntent, flags)
+
     val rejectIntent = Intent(this, DiscoveryService::class.java).apply { action = ACTION_REJECT; setPackage(packageName) }
-    val accept = PendingIntent.getService(this, 1, acceptIntent, flags)
     val reject = PendingIntent.getService(this, 2, rejectIntent, flags)
+
     val builder = Notification.Builder(this, CALL_CHANNEL_ID)
       .setContentTitle("Incoming iTantra call")
       .setContentText("$name is trying to call you")
@@ -203,7 +225,7 @@ class DiscoveryService : Service() {
       .addAction(Notification.Action.Builder(null, "Reject", reject).build())
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) builder.setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
     getSystemService(NotificationManager::class.java).notify(CALL_NOTIFICATION_ID, builder.build())
-    Log.d(TAG, "[NOTIFICATION] POSTED id=$CALL_NOTIFICATION_ID acceptAction=$ACTION_ACCEPT")
+    Log.d(TAG, "[NOTIFICATION] POSTED id=$CALL_NOTIFICATION_ID acceptAction=ActivityPendingIntent")
   }
 
   private fun sendCallAccept(ip: String, existingSocket: Socket?): Boolean {
@@ -235,22 +257,28 @@ class DiscoveryService : Service() {
     }
   }
 
-  private fun acceptCall() {
-    Log.d(TAG, "[ACCEPT] ===== ACCEPT BUTTON RECEIVED =====")
+  private fun acceptCall(launchActivity: Boolean = true): Boolean {
+    Log.d(TAG, "[ACCEPT] ===== ACCEPT PROCESS START launchActivity=$launchActivity =====")
     restorePendingCall()
     val socket = pendingSocket
     val ip = pendingIp ?: ""
     val name = pendingName ?: "iTantra device"
     Log.d(TAG, "[ACCEPT] state before ACK ip=$ip name=$name socketPresent=${socket != null} socketClosed=${socket?.isClosed}")
-    if (ip.isBlank()) { Log.e(TAG, "[ACCEPT] ABORT: no pending caller IP"); return }
+    if (ip.isBlank()) { Log.e(TAG, "[ACCEPT] ABORT: no pending caller IP"); return false }
     val accepted = sendCallAccept(ip, socket)
-    if (!accepted) { Log.e(TAG, "[ACCEPT] ABORT: could not deliver call_accept; keeping pending state for retry"); return }
-    Log.d(TAG, "[ACCEPT] ACK delivered; now closing temporary background call socket")
+    if (!accepted) { Log.e(TAG, "[ACCEPT] ABORT: could not deliver call_accept; keeping pending state for retry"); return false }
+    Log.d(TAG, "[ACCEPT] ACK delivered; closing temporary background call socket")
     clearPending()
     getSystemService(NotificationManager::class.java).cancel(CALL_NOTIFICATION_ID)
     try { callServer?.close() } catch (e: Exception) { Log.e(TAG, "[ACCEPT] Error closing background call server", e) }
     callServer = null
     clearPersistedPendingCall()
+
+    if (!launchActivity) {
+      Log.d(TAG, "[ACCEPT] launchActivity=false; MainActivity was opened directly by notification PendingIntent")
+      return true
+    }
+
     val encodedName = URLEncoder.encode(name, "UTF-8")
     val uri = "itantra://incoming-call?ip=$ip&name=$encodedName"
     Log.d(TAG, "[ACCEPT] Preparing MainActivity deep link uri=$uri")
@@ -265,7 +293,9 @@ class DiscoveryService : Service() {
       Log.d(TAG, "[ACCEPT] startActivity(MainActivity) RETURNED")
     } catch (e: Exception) {
       Log.e(TAG, "[ACCEPT] startActivity FAILED", e)
+      return false
     }
+    return true
   }
 
   private fun rejectCall() {
@@ -311,7 +341,7 @@ class DiscoveryService : Service() {
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
     Log.d(TAG, "[SERVICE] onStartCommand action=${intent?.action} data=${intent?.data} startId=$startId")
     when (intent?.action) {
-      ACTION_ACCEPT -> acceptCall()
+      ACTION_ACCEPT -> acceptCall(true)
       ACTION_REJECT -> rejectCall()
       else -> Log.d(TAG, "[SERVICE] Normal service start")
     }
@@ -320,6 +350,7 @@ class DiscoveryService : Service() {
 
   override fun onDestroy() {
     Log.d(TAG, "[SERVICE] ===== DiscoveryService.onDestroy() =====")
+    if (instance === this) instance = null
     stopNsd()
     try { callServer?.close() } catch (_: Exception) {}
     callServer = null
