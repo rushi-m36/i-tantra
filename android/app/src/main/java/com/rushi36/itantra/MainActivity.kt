@@ -5,8 +5,6 @@ import expo.modules.splashscreen.SplashScreenManager
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.net.ConnectivityManager
-import android.net.NetworkCapabilities
 import android.os.Build
 import android.os.Bundle
 
@@ -36,23 +34,19 @@ class MainActivity : ReactActivity() {
 
   override fun onPause() {
     super.onPause()
-    startBackgroundDiscoveryServiceIfWifiConnected()
+    startBackgroundDiscoveryService()
   }
 
-  private fun isWifiConnected(): Boolean {
-    val connectivityManager = getSystemService(ConnectivityManager::class.java)
-    val network = connectivityManager.activeNetwork ?: return false
-    val capabilities = connectivityManager.getNetworkCapabilities(network) ?: return false
-    return capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
-  }
-
-  private fun startBackgroundDiscoveryServiceIfWifiConnected() {
-    if (!isWifiConnected()) return
+  private fun startBackgroundDiscoveryService() {
     val intent = Intent(this, DiscoveryService::class.java)
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-      startForegroundService(intent)
-    } else {
-      startService(intent)
+    try {
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        startForegroundService(intent)
+      } else {
+        startService(intent)
+      }
+    } catch (_: Exception) {
+      // Android may reject a background service start in restricted states.
     }
   }
 
