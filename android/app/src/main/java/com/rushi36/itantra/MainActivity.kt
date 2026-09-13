@@ -24,7 +24,7 @@ class MainActivity : ReactActivity() {
   private val TAG = "iTantraMainActivity"
 
   override fun onCreate(savedInstanceState: Bundle?) {
-    Log.d(TAG, "[MAIN 1] onCreate ENTER intent=${intent?.action} data=${intent?.data} flags=${intent?.flags}")
+    Log.d(TAG, "[MAIN 1] onCreate ENTER intent=${intent?.action} data=${intent?.data} flags=${intent?.flags} notificationAccept=${intent?.getBooleanExtra(DiscoveryService.EXTRA_NOTIFICATION_ACCEPT, false)}")
     SplashScreenManager.registerOnActivity(this)
     super.onCreate(null)
     Log.d(TAG, "[MAIN 2] ReactActivity onCreate completed")
@@ -37,7 +37,7 @@ class MainActivity : ReactActivity() {
   }
 
   override fun onNewIntent(intent: Intent?) {
-    Log.d(TAG, "[MAIN 3] onNewIntent ENTER action=${intent?.action} data=${intent?.data} flags=${intent?.flags}")
+    Log.d(TAG, "[MAIN 3] onNewIntent ENTER action=${intent?.action} data=${intent?.data} flags=${intent?.flags} notificationAccept=${intent?.getBooleanExtra(DiscoveryService.EXTRA_NOTIFICATION_ACCEPT, false)}")
     super.onNewIntent(intent)
     setIntent(intent)
     handleIncomingCallIntent(intent)
@@ -50,7 +50,17 @@ class MainActivity : ReactActivity() {
       Log.d(TAG, "[MAIN LINK] Not an incoming-call deep link")
       return
     }
-    Log.d(TAG, "[MAIN LINK] INCOMING CALL DEEP LINK DETECTED ip=${intent.data?.getQueryParameter("ip")} name=${intent.data?.getQueryParameter("name")}")
+
+    val notificationAccept = intent.getBooleanExtra(DiscoveryService.EXTRA_NOTIFICATION_ACCEPT, false)
+    Log.d(TAG, "[MAIN LINK] INCOMING CALL DEEP LINK DETECTED ip=${intent.data?.getQueryParameter("ip")} name=${intent.data?.getQueryParameter("name")} notificationAccept=$notificationAccept")
+
+    if (notificationAccept) {
+      Log.d(TAG, "[MAIN LINK] Notification Accept opened MainActivity; delivering native call_accept before RN handoff")
+      val delivered = DiscoveryService.acceptCallFromActivity()
+      Log.d(TAG, "[MAIN LINK] Native call_accept delivery result=$delivered")
+    }
+
+    intent.removeExtra(DiscoveryService.EXTRA_NOTIFICATION_ACCEPT)
     intent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
   }
 
