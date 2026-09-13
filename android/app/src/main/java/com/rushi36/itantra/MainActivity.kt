@@ -7,6 +7,8 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 
 import com.facebook.react.ReactActivity
 import com.facebook.react.ReactActivityDelegate
@@ -16,6 +18,9 @@ import com.facebook.react.defaults.DefaultReactActivityDelegate
 import expo.modules.ReactActivityDelegateWrapper
 
 class MainActivity : ReactActivity() {
+  private val backgroundServiceHandler = Handler(Looper.getMainLooper())
+  private var backgroundServiceStartRunnable: Runnable? = null
+
   override fun onCreate(savedInstanceState: Bundle?) {
     SplashScreenManager.registerOnActivity(this)
     super.onCreate(null)
@@ -28,13 +33,22 @@ class MainActivity : ReactActivity() {
   }
 
   override fun onResume() {
-    super.onResume()
+    backgroundServiceStartRunnable?.let { backgroundServiceHandler.removeCallbacks(it) }
+    backgroundServiceStartRunnable = null
     stopBackgroundDiscoveryService()
+    super.onResume()
   }
 
   override fun onPause() {
     super.onPause()
-    startBackgroundDiscoveryService()
+    backgroundServiceStartRunnable?.let { backgroundServiceHandler.removeCallbacks(it) }
+    val runnable = Runnable {
+      backgroundServiceStartRunnable = null
+      startBackgroundDiscoveryService()
+    }
+    backgroundServiceStartRunnable = runnable
+    // Give React Native AppState time to stop its foreground TCP server first.
+    backgroundServiceHandler.postDelayed(runnable, 1200)
   }
 
   private fun startBackgroundDiscoveryService() {
@@ -56,6 +70,12 @@ class MainActivity : ReactActivity() {
     } catch (_: Exception) {
       // Service may already be stopped.
     }
+  }
+
+  override fun onDestroy() {
+    backgroundServiceStartRunnable?.let { backgroundServiceHandler.removeCallbacks(it) }
+    backgroundServiceStartRunnable = null
+    super.onDestroy()
   }
 
   override fun getMainComponentName(): String = "main"
