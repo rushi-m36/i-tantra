@@ -17,29 +17,24 @@ interface CommunicationContextType {
 export const CommunicationContext = createContext<CommunicationContextType | undefined>(undefined);
 
 export function CommunicationProvider({ children }: { children: React.ReactNode }) {
-  const [devices, setDevices] = useState<Device[]>([]); const [scanStatus, setScanStatus] = useState<ScanStatus>({ scanning: false, currentIp: null, scanned: 0, total: 0, found: 0, phase: "idle" }); const [callState, setCallState] = useState<CallState>("idle"); const [messages, setMessages] = useState<ChatMessage[]>([]); const [currentDevice, setCurrentDevice] = useState<Device | null>(null); const currentDeviceRef = useRef<Device | null>(null); const [isConnected, setIsConnected] = useState(false); const [incomingCallFrom, setIncomingCallFrom] = useState<Device | null>(null); const [tcp, setTcp] = useState<TCPService | null>(null); const tcpRef = useRef<TCPService | null>(null); const [discovery, setDiscovery] = useState<DeviceDiscovery | null>(null); const [deviceId, setDeviceId] = useState(""); const [deviceName, setDeviceName] = useState(""); const [refreshVersion, setRefreshVersion] = useState(0); const autoConnecting = useRef(false);
+  const [devices, setDevices] = useState<Device[]>([]); const [scanStatus, setScanStatus] = useState<ScanStatus>({ scanning: false, currentIp: null, scanned: 0, total: 0, found: 0, phase: "idle" }); const [callState, setCallState] = useState<CallState>("idle"); const [messages, setMessages] = useState<ChatMessage[]>([]); const [currentDevice, setCurrentDevice] = useState<Device | null>(null); const currentDeviceRef = useRef<Device | null>(null); const callStateRef = useRef<CallState>("idle"); const [isConnected, setIsConnected] = useState(false); const [incomingCallFrom, setIncomingCallFrom] = useState<Device | null>(null); const [tcp, setTcp] = useState<TCPService | null>(null); const tcpRef = useRef<TCPService | null>(null); const [discovery, setDiscovery] = useState<DeviceDiscovery | null>(null); const [deviceId, setDeviceId] = useState(""); const [deviceName, setDeviceName] = useState(""); const [refreshVersion, setRefreshVersion] = useState(0); const autoConnecting = useRef(false);
   useEffect(() => { currentDeviceRef.current = currentDevice; }, [currentDevice]);
+  useEffect(() => { callStateRef.current = callState; }, [callState]);
 
   const handleIncomingMessage = useCallback(async (msg: Message, disc: DeviceDiscovery) => {
     switch (msg.type) {
       case "call_request": {
         const callReq = msg as CallRequestMessage;
         const caller: Device = { id: callReq.senderId, name: callReq.senderName, ip: "", port: TCP_PORT, status: "calling", lastSeen: Date.now() };
-        currentDeviceRef.current = caller;
-        setIncomingCallFrom(caller);
-        setCurrentDevice(caller);
-        setCallState("incoming");
+        currentDeviceRef.current = caller; setIncomingCallFrom(caller); setCurrentDevice(caller); setCallState("incoming");
         break;
       }
       case "call_accept": {
         setCallState("connected"); setIncomingCallFrom(null); setMessages([]);
         const peer = currentDeviceRef.current; const service = tcpRef.current;
         if (peer?.ip && service) {
-          try {
-            await new Promise((resolve) => setTimeout(resolve, 500));
-            await service.connectToDevice(peer.ip, peer.port || TCP_PORT);
-            console.log("[CALL HANDOFF] Caller reconnected after remote accepted", peer.ip);
-          } catch (error) { console.error("[CALL HANDOFF] Caller reconnect failed", error); }
+          try { await new Promise((resolve) => setTimeout(resolve, 500)); await service.connectToDevice(peer.ip, peer.port || TCP_PORT); console.log("[CALL HANDOFF] Caller reconnected after remote accepted", peer.ip); }
+          catch (error) { console.error("[CALL HANDOFF] Caller reconnect failed", error); }
         }
         break;
       }
@@ -64,9 +59,7 @@ export function CommunicationProvider({ children }: { children: React.ReactNode 
         disc.onDevicesChanged((newDevices) => {
           if (!active) return;
           setDevices(newDevices);
-          // Do not auto-connect while a call handoff is in progress. A second
-          // connection here can race the accepted call connection.
-          if (callState !== "idle") return;
+          if (callStateRef.current !== "idle") return;
           const device = newDevices[0];
           if (!device?.ip || tcpService.isConnected() || autoConnecting.current) return;
           autoConnecting.current = true;
@@ -82,7 +75,7 @@ export function CommunicationProvider({ children }: { children: React.ReactNode 
     };
     void init();
     return () => { active = false; autoConnecting.current = false; if (tcpRef.current === localTcp) tcpRef.current = null; void localTcp?.cleanup(); localDiscovery?.cleanup(); };
-  }, [handleIncomingMessage, callState]);
+  }, [handleIncomingMessage]);
 
   useEffect(() => { if (!discovery || callState !== "idle" || refreshVersion === 0) return; discovery.stopDiscovery(); }, [discovery, refreshVersion, callState]);
 
@@ -96,21 +89,11 @@ export function CommunicationProvider({ children }: { children: React.ReactNode 
       const ip = typeof parsed.queryParams?.ip === "string" ? parsed.queryParams.ip : "";
       const name = typeof parsed.queryParams?.name === "string" ? parsed.queryParams.name : "iTantra device";
       if (!ip) return;
-
       const remote: Device = { id: `remote-${ip}`, name, ip, port: TCP_PORT, status: "connected", lastSeen: Date.now() };
       try {
         autoConnecting.current = true;
-        currentDeviceRef.current = remote;
-        setCurrentDevice(remote);
-        setIncomingCallFrom(null);
-        setMessages([]);
-        setCallState("calling");
-
-        // The native background service launches this URL when Accept is
-        // pressed. Explicitly navigate to the communication route so this
-        // works whether the app was cold-started or resumed via onNewIntent.
+        currentDeviceRef.current = remote; setCurrentDevice(remote); setIncomingCallFrom(null); setMessages([]); setCallState("calling");
         router.replace("/communication");
-
         await new Promise((resolve) => setTimeout(resolve, 700));
         await tcp.connectToDevice(ip, TCP_PORT);
         setCallState("connected");
