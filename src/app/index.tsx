@@ -6,27 +6,15 @@ import { BottomNav } from "../components/BottomNav";
 import { IncomingCallModal } from "../components/IncomingCallModal";
 import { useCommunication } from "../context/CommunicationContext";
 import AvailableDevicesScreen from "../screens/AvailableDevicesScreen";
-import CommunicationScreen from "../screens/CommunicationScreen";
 
 export default function App() {
-  const router = useRouter();
   const { callState, scanStatus, refreshDiscovery } = useCommunication();
-
-  useEffect(() => {
-    if (callState === "connected") {
-      router.replace("/communication");
-    }
-  }, [callState, router]);
 
   const handleStartScanning = () => {
     if (scanStatus.scanning || callState !== "idle") return;
     refreshDiscovery();
     setTimeout(() => DeviceEventEmitter.emit("itantraRefreshDiscovery"), 0);
   };
-
-  if (callState === "connected") {
-    return <CommunicationScreen />;
-  }
 
   const isScanning = scanStatus.phase === "nsd";
   const showStartButton = callState === "idle" && scanStatus.phase === "idle";
