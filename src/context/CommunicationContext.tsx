@@ -1,5 +1,6 @@
 import React, { createContext, useCallback, useEffect, useRef, useState } from "react";
 import * as Linking from "expo-linking";
+import { router } from "expo-router";
 import { DeviceDiscovery, getDeviceDiscovery, ScanStatus } from "../services/network/deviceDiscovery";
 import { TCPService } from "../services/network/tcpService";
 import { getSpeechToTextService } from "../services/speech/speechToText";
@@ -18,19 +19,112 @@ export const CommunicationContext = createContext<CommunicationContextType | und
 export function CommunicationProvider({ children }: { children: React.ReactNode }) {
   const [devices, setDevices] = useState<Device[]>([]); const [scanStatus, setScanStatus] = useState<ScanStatus>({ scanning: false, currentIp: null, scanned: 0, total: 0, found: 0, phase: "idle" }); const [callState, setCallState] = useState<CallState>("idle"); const [messages, setMessages] = useState<ChatMessage[]>([]); const [currentDevice, setCurrentDevice] = useState<Device | null>(null); const currentDeviceRef = useRef<Device | null>(null); const [isConnected, setIsConnected] = useState(false); const [incomingCallFrom, setIncomingCallFrom] = useState<Device | null>(null); const [tcp, setTcp] = useState<TCPService | null>(null); const tcpRef = useRef<TCPService | null>(null); const [discovery, setDiscovery] = useState<DeviceDiscovery | null>(null); const [deviceId, setDeviceId] = useState(""); const [deviceName, setDeviceName] = useState(""); const [refreshVersion, setRefreshVersion] = useState(0); const autoConnecting = useRef(false);
   useEffect(() => { currentDeviceRef.current = currentDevice; }, [currentDevice]);
+
   const handleIncomingMessage = useCallback(async (msg: Message, disc: DeviceDiscovery) => {
     switch (msg.type) {
-      case "call_request": { const callReq = msg as CallRequestMessage; const caller: Device = { id: callReq.senderId, name: callReq.senderName, ip: "", port: TCP_PORT, status: "calling", lastSeen: Date.now() }; currentDeviceRef.current = caller; setIncomingCallFrom(caller); setCurrentDevice(caller); setCallState("incoming"); break; }
-      case "call_accept": { setCallState("connected"); setIncomingCallFrom(null); setMessages([]); const peer = currentDeviceRef.current; const service = tcpRef.current; if (peer?.ip && service) { try { await new Promise((resolve) => setTimeout(resolve, 500)); await service.connectToDevice(peer.ip, peer.port || TCP_PORT); console.log("[CALL HANDOFF] Caller reconnected after remote accepted", peer.ip); } catch (error) { console.error("[CALL HANDOFF] Caller reconnect failed", error); } } break; }
+      case "call_request": {
+        const callReq = msg as CallRequestMessage;
+        const caller: Device = { id: callReq.senderId, name: callReq.senderName, ip: "", port: TCP_PORT, status: "calling", lastSeen: Date.now() };
+        currentDeviceRef.current = caller;
+        setIncomingCallFrom(caller);
+        setCurrentDevice(caller);
+        setCallState("incoming");
+        break;
+      }
+      case "call_accept": {
+        setCallState("connected"); setIncomingCallFrom(null); setMessages([]);
+        const peer = currentDeviceRef.current; const service = tcpRef.current;
+        if (peer?.ip && service) {
+          try {
+            await new Promise((resolve) => setTimeout(resolve, 500));
+            await service.connectToDevice(peer.ip, peer.port || TCP_PORT);
+            console.log("[CALL HANDOFF] Caller reconnected after remote accepted", peer.ip);
+          } catch (error) { console.error("[CALL HANDOFF] Caller reconnect failed", error); }
+        }
+        break;
+      }
       case "call_reject": setCallState("rejected"); setIncomingCallFrom(null); setTimeout(() => { setCallState("idle"); setCurrentDevice(null); currentDeviceRef.current = null; }, 1500); break;
-      case "speech_message": { const speechMsg = msg as SpeechMessage; const incomingText = typeof speechMsg.text === "string" ? speechMsg.text : String(speechMsg.text ?? ""); const senderName = speechMsg.senderId === disc.getDeviceId() ? "You (loopback)" : "Remote device"; const chatMsg: ChatMessage = { id: speechMsg.id, senderId: speechMsg.senderId, senderName, text: incomingText, timestamp: speechMsg.timestamp }; setMessages((prev) => prev.some((item) => item.id === chatMsg.id) ? prev : [...prev, chatMsg]); void getTextToSpeechService().speak(incomingText); break; }
+      case "speech_message": {
+        const speechMsg = msg as SpeechMessage; const incomingText = typeof speechMsg.text === "string" ? speechMsg.text : String(speechMsg.text ?? ""); const senderName = speechMsg.senderId === disc.getDeviceId() ? "You (loopback)" : "Remote device";
+        const chatMsg: ChatMessage = { id: speechMsg.id, senderId: speechMsg.senderId, senderName, text: incomingText, timestamp: speechMsg.timestamp };
+        setMessages((prev) => prev.some((item) => item.id === chatMsg.id) ? prev : [...prev, chatMsg]); void getTextToSpeechService().speak(incomingText); break;
+      }
       case "call_end": setCallState("idle"); setCurrentDevice(null); currentDeviceRef.current = null; setIncomingCallFrom(null); setMessages([]); break;
       case "heartbeat": break;
     }
   }, []);
-  useEffect(() => { let active = true; let localTcp: TCPService | null = null; let localDiscovery: DeviceDiscovery | null = null; const init = async () => { try { const disc = await getDeviceDiscovery(); if (!active) return; localDiscovery = disc; setDeviceId(disc.getDeviceId()); setDeviceName(disc.getDeviceName()); const tcpService = new TCPService(disc.getDeviceId()); localTcp = tcpService; tcpRef.current = tcpService; setTcp(tcpService); disc.onDevicesChanged((newDevices) => { if (!active) return; setDevices(newDevices); const device = newDevices[0]; if (!device?.ip || tcpService.isConnected() || autoConnecting.current) return; autoConnecting.current = true; void tcpService.connectToDevice(device.ip, device.port || TCP_PORT).finally(() => { autoConnecting.current = false; }); }); disc.onScanStatusChanged((status) => { if (active) setScanStatus(status); }); tcpService.onMessage((msg) => { if (active) void handleIncomingMessage(msg, disc); }); tcpService.onConnectionChange((connected) => { if (active) setIsConnected(connected); if (!connected) autoConnecting.current = false; }); await tcpService.startServer(); if (!active) { await tcpService.cleanup(); return; } setDiscovery(disc); } catch (error) { console.error("Failed to initialize communication services:", error); } }; void init(); return () => { active = false; autoConnecting.current = false; if (tcpRef.current === localTcp) tcpRef.current = null; void localTcp?.cleanup(); localDiscovery?.cleanup(); }; }, [handleIncomingMessage]);
+
+  useEffect(() => {
+    let active = true; let localTcp: TCPService | null = null; let localDiscovery: DeviceDiscovery | null = null;
+    const init = async () => {
+      try {
+        const disc = await getDeviceDiscovery(); if (!active) return;
+        localDiscovery = disc; setDeviceId(disc.getDeviceId()); setDeviceName(disc.getDeviceName());
+        const tcpService = new TCPService(disc.getDeviceId()); localTcp = tcpService; tcpRef.current = tcpService; setTcp(tcpService);
+        disc.onDevicesChanged((newDevices) => {
+          if (!active) return;
+          setDevices(newDevices);
+          // Do not auto-connect while a call handoff is in progress. A second
+          // connection here can race the accepted call connection.
+          if (callState !== "idle") return;
+          const device = newDevices[0];
+          if (!device?.ip || tcpService.isConnected() || autoConnecting.current) return;
+          autoConnecting.current = true;
+          void tcpService.connectToDevice(device.ip, device.port || TCP_PORT).finally(() => { autoConnecting.current = false; });
+        });
+        disc.onScanStatusChanged((status) => { if (active) setScanStatus(status); });
+        tcpService.onMessage((msg) => { if (active) void handleIncomingMessage(msg, disc); });
+        tcpService.onConnectionChange((connected) => { if (active) setIsConnected(connected); if (!connected) autoConnecting.current = false; });
+        await tcpService.startServer();
+        if (!active) { await tcpService.cleanup(); return; }
+        setDiscovery(disc);
+      } catch (error) { console.error("Failed to initialize communication services:", error); }
+    };
+    void init();
+    return () => { active = false; autoConnecting.current = false; if (tcpRef.current === localTcp) tcpRef.current = null; void localTcp?.cleanup(); localDiscovery?.cleanup(); };
+  }, [handleIncomingMessage, callState]);
+
   useEffect(() => { if (!discovery || callState !== "idle" || refreshVersion === 0) return; discovery.stopDiscovery(); }, [discovery, refreshVersion, callState]);
-  useEffect(() => { if (!tcp) return; let handledUrl = ""; const handleUrl = async (url: string | null) => { if (!url || !url.startsWith("itantra://incoming-call") || url === handledUrl) return; handledUrl = url; const parsed = Linking.parse(url); const ip = typeof parsed.queryParams?.ip === "string" ? parsed.queryParams.ip : ""; const name = typeof parsed.queryParams?.name === "string" ? parsed.queryParams.name : "iTantra device"; if (!ip) return; const remote: Device = { id: `remote-${ip}`, name, ip, port: TCP_PORT, status: "connected", lastSeen: Date.now() }; try { currentDeviceRef.current = remote; setCurrentDevice(remote); setIncomingCallFrom(null); setCallState("calling"); await new Promise((resolve) => setTimeout(resolve, 700)); await tcp.connectToDevice(ip, TCP_PORT); setMessages([]); setCallState("connected"); } catch (error) { console.error("[CALL HANDOFF] Failed to reconnect after accepting background call:", error); setCallState("idle"); setCurrentDevice(null); currentDeviceRef.current = null; } }; void Linking.getInitialURL().then(handleUrl); const subscription = Linking.addEventListener("url", ({ url }) => { void handleUrl(url); }); return () => subscription.remove(); }, [tcp]);
+
+  useEffect(() => {
+    if (!tcp) return;
+    let handledUrl = "";
+    const handleUrl = async (url: string | null) => {
+      if (!url || !url.startsWith("itantra://incoming-call") || url === handledUrl) return;
+      handledUrl = url;
+      const parsed = Linking.parse(url);
+      const ip = typeof parsed.queryParams?.ip === "string" ? parsed.queryParams.ip : "";
+      const name = typeof parsed.queryParams?.name === "string" ? parsed.queryParams.name : "iTantra device";
+      if (!ip) return;
+
+      const remote: Device = { id: `remote-${ip}`, name, ip, port: TCP_PORT, status: "connected", lastSeen: Date.now() };
+      try {
+        autoConnecting.current = true;
+        currentDeviceRef.current = remote;
+        setCurrentDevice(remote);
+        setIncomingCallFrom(null);
+        setMessages([]);
+        setCallState("calling");
+
+        // The native background service launches this URL when Accept is
+        // pressed. Explicitly navigate to the communication route so this
+        // works whether the app was cold-started or resumed via onNewIntent.
+        router.replace("/communication");
+
+        await new Promise((resolve) => setTimeout(resolve, 700));
+        await tcp.connectToDevice(ip, TCP_PORT);
+        setCallState("connected");
+        console.log("[CALL HANDOFF] Communication screen opened and reconnected", ip);
+      } catch (error) {
+        console.error("[CALL HANDOFF] Failed to reconnect after accepting background call:", error);
+        setCallState("idle"); setCurrentDevice(null); currentDeviceRef.current = null;
+      } finally { autoConnecting.current = false; }
+    };
+    void Linking.getInitialURL().then(handleUrl);
+    const subscription = Linking.addEventListener("url", ({ url }) => { void handleUrl(url); });
+    return () => subscription.remove();
+  }, [tcp]);
+
   const callDevice = useCallback(async (device: Device) => { if (!tcp || !device.ip) return; currentDeviceRef.current = device; setCurrentDevice(device); setCallState("calling"); setIncomingCallFrom(null); try { if (!tcp.isConnectedTo(device.ip, device.port || TCP_PORT)) await tcp.connectToDevice(device.ip, device.port || TCP_PORT); await tcp.sendMessage({ type: "call_request", senderId: deviceId, senderName: deviceName, timestamp: Date.now() }); } catch (error) { console.error("Failed to call device:", error); await tcp.disconnect(); setCallState("idle"); setCurrentDevice(null); currentDeviceRef.current = null; } }, [tcp, deviceId, deviceName]);
   const cancelCall = useCallback(async () => { if (!tcp) return; try { if (tcp.isConnected()) await tcp.sendMessage({ type: "call_end", senderId: deviceId, timestamp: Date.now() }); } catch {} await tcp.disconnect(); setCallState("idle"); setCurrentDevice(null); currentDeviceRef.current = null; setIncomingCallFrom(null); }, [tcp, deviceId]);
   const acceptCall = useCallback(async () => { if (!tcp || !incomingCallFrom) return; try { await tcp.sendMessage({ type: "call_accept", senderId: deviceId, timestamp: Date.now() }); setCallState("connected"); setCurrentDevice(incomingCallFrom); currentDeviceRef.current = incomingCallFrom; setIncomingCallFrom(null); setMessages([]); } catch (error) { console.error("Failed to accept call:", error); } }, [tcp, incomingCallFrom, deviceId]);
