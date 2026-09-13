@@ -84,8 +84,10 @@ export function CommunicationProvider({ children }: { children: React.ReactNode 
   useEffect(() => { if (!discovery || callState !== "idle" || refreshVersion === 0) return; discovery.stopDiscovery(); }, [discovery, refreshVersion, callState]);
 
   useEffect(() => {
-    if (!tcp) return;
+    let active = true;
+    let initialUrlPromise: Promise<void> | null = null;
     const handleUrl = async (url: string | null) => {
+      if (!active) { console.log("[CALL FLOW 29] Ignoring URL from inactive provider"); return; }
       console.log(`[CALL FLOW 30] handleUrl invoked url=${url}`);
       if (!url || !url.startsWith("itantra://incoming-call")) { console.log("[CALL FLOW 31] URL ignored"); return; }
       const now = Date.now();
@@ -96,22 +98,26 @@ export function CommunicationProvider({ children }: { children: React.ReactNode 
       if (!ip) { handledIncomingCallUrls.delete(url); return; }
       const remote: Device = { id: `remote-${ip}`, name, ip, port: TCP_PORT, status: "connected", lastSeen: Date.now() };
       try {
+        if (!active) return;
         autoConnecting.current = true; currentDeviceRef.current = remote; callStateRef.current = "calling"; setCurrentDevice(remote); setIncomingCallFrom(null); setMessages([]); setCallState("calling");
         console.log("[CALL FLOW 35] state=calling; navigating /communication"); router.replace("/communication");
         await new Promise(resolve => setTimeout(resolve, 300));
+        if (!active) { console.log("[CALL FLOW 36] provider became inactive during handoff; aborting stale reconnect"); return; }
         const reconnectService = tcpRef.current;
         console.log(`[CALL FLOW 37] reconnect service available=${!!reconnectService} providerTcpChanged=${reconnectService !== tcp}`);
         if (!reconnectService) throw new Error("TCPService unavailable after communication screen handoff");
         await connectWithRetry(reconnectService, ip, TCP_PORT, "callee reconnect");
+        if (!active) return;
         setCallState("connected"); callStateRef.current = "connected"; console.log("[CALL FLOW 39] state=connected");
       } catch (error) {
+        if (!active) return;
         console.error("[CALL FLOW 40] callee handoff/reconnect FAILED after retries", error); setCallState("disconnected"); callStateRef.current = "disconnected"; handledIncomingCallUrls.delete(url);
-      } finally { autoConnecting.current = false; console.log("[CALL FLOW 41] deep-link handler FINISHED"); }
+      } finally { autoConnecting.current = false; if (active) console.log("[CALL FLOW 41] deep-link handler FINISHED"); }
     };
     console.log("[CALL FLOW 29] Registering Expo Linking handlers");
-    void Linking.getInitialURL().then(handleUrl);
+    initialUrlPromise = Linking.getInitialURL().then(handleUrl).catch(error => { if (active) console.error("[CALL FLOW 32] getInitialURL FAILED", error); });
     const subscription = Linking.addEventListener("url", ({ url }) => { void handleUrl(url); });
-    return () => subscription.remove();
+    return () => { active = false; subscription.remove(); void initialUrlPromise; };
   }, [tcp]);
 
   const callDevice = useCallback(async (device: Device) => { if (!tcp || !device.ip) return; currentDeviceRef.current = device; setCurrentDevice(device); setCallState("calling"); setIncomingCallFrom(null); try { if (!tcp.isConnectedTo(device.ip, device.port || TCP_PORT)) await tcp.connectToDevice(device.ip, device.port || TCP_PORT); await tcp.sendMessage({ type: "call_request", senderId: deviceId, senderName: deviceName, timestamp: Date.now() }); } catch (error) { console.error("[CALL FLOW OUTGOING] FAILED", error); await tcp.disconnect(); setCallState("idle"); setCurrentDevice(null); currentDeviceRef.current = null; } }, [tcp, deviceId, deviceName]);
