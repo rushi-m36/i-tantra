@@ -8,7 +8,30 @@ import { getTextToSpeechService } from "../services/speech/textToSpeech";
 import { CallRequestMessage, CallState, ChatMessage, Device, Message, SpeechMessage } from "../types/communication";
 
 const TCP_PORT = 5555;
+const RECONNECT_ATTEMPTS = 12;
+const RECONNECT_DELAY = 400;
 const generateUUID = (): string => "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => { const r = (Math.random() * 16) | 0; const v = c === "x" ? r : (r & 0x3) | 0x8; return v.toString(16); });
+
+async function connectWithRetry(service: TCPService, ip: string, port: number, label: string): Promise<void> {
+  let lastError: unknown = null;
+  for (let attempt = 1; attempt <= RECONNECT_ATTEMPTS; attempt++) {
+    console.log(`[CALL RETRY] ${label} attempt ${attempt}/${RECONNECT_ATTEMPTS} -> ${ip}:${port}`);
+    try {
+      await service.connectToDevice(ip, port);
+      console.log(`[CALL RETRY] ${label} SUCCESS on attempt ${attempt}`);
+      return;
+    } catch (error) {
+      lastError = error;
+      console.error(`[CALL RETRY] ${label} FAILED attempt ${attempt}`, error);
+      if (attempt < RECONNECT_ATTEMPTS) {
+        const delay = RECONNECT_DELAY + (attempt - 1) * 100;
+        console.log(`[CALL RETRY] ${label} waiting ${delay}ms before next attempt`);
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(`TCP reconnect failed: ${label}`);
+}
 
 interface CommunicationContextType {
   devices: Device[]; scanStatus: ScanStatus; callState: CallState; messages: ChatMessage[]; currentDevice: Device | null; localDeviceId: string; localDeviceName: string; isConnected: boolean; incomingCallFrom: Device | null;
@@ -25,7 +48,7 @@ export function CommunicationProvider({ children }: { children: React.ReactNode 
     console.log(`[CALL FLOW 10] RN received TCP message type=${msg.type}`);
     switch (msg.type) {
       case "call_request": { const callReq = msg as CallRequestMessage; console.log(`[CALL FLOW 11] call_request sender=${callReq.senderName} id=${callReq.senderId}`); const caller: Device = { id: callReq.senderId, name: callReq.senderName, ip: "", port: TCP_PORT, status: "calling", lastSeen: Date.now() }; currentDeviceRef.current = caller; setIncomingCallFrom(caller); setCurrentDevice(caller); setCallState("incoming"); console.log("[CALL FLOW 12] RN call state=incoming"); break; }
-      case "call_accept": { console.log("[CALL FLOW 20] call_accept received by caller-side RN"); setCallState("connected"); setIncomingCallFrom(null); setMessages([]); const peer = currentDeviceRef.current; const service = tcpRef.current; console.log(`[CALL FLOW 21] caller peer=${JSON.stringify(peer)} tcp=${!!service}`); if (peer?.ip && service) { try { await new Promise((resolve) => setTimeout(resolve, 500)); console.log(`[CALL FLOW 22] caller reconnecting to ${peer.ip}:${peer.port || TCP_PORT}`); await service.connectToDevice(peer.ip, peer.port || TCP_PORT); console.log("[CALL FLOW 23] caller reconnect SUCCESS"); } catch (error) { console.error("[CALL FLOW 24] caller reconnect FAILED", error); } } else console.warn("[CALL FLOW 25] caller cannot reconnect: peer IP or TCPService missing"); break; }
+      case "call_accept": { console.log("[CALL FLOW 20] call_accept received by caller-side RN"); setCallState("connected"); setIncomingCallFrom(null); setMessages([]); const peer = currentDeviceRef.current; const service = tcpRef.current; console.log(`[CALL FLOW 21] caller peer=${JSON.stringify(peer)} tcp=${!!service}`); if (peer?.ip && service) { try { await new Promise((resolve) => setTimeout(resolve, 300)); await connectWithRetry(service, peer.ip, peer.port || TCP_PORT, "caller reconnect"); console.log("[CALL FLOW 23] caller reconnect SUCCESS"); } catch (error) { console.error("[CALL FLOW 24] caller reconnect FAILED after retries", error); setCallState("disconnected"); } } else console.warn("[CALL FLOW 25] caller cannot reconnect: peer IP or TCPService missing"); break; }
       case "call_reject": setCallState("rejected"); setIncomingCallFrom(null); setTimeout(() => { setCallState("idle"); setCurrentDevice(null); currentDeviceRef.current = null; }, 1500); break;
       case "speech_message": { const speechMsg = msg as SpeechMessage; const incomingText = typeof speechMsg.text === "string" ? speechMsg.text : String(speechMsg.text ?? ""); const senderName = speechMsg.senderId === disc.getDeviceId() ? "You (loopback)" : "Remote device"; const chatMsg: ChatMessage = { id: speechMsg.id, senderId: speechMsg.senderId, senderName, text: incomingText, timestamp: speechMsg.timestamp }; setMessages((prev) => prev.some((item) => item.id === chatMsg.id) ? prev : [...prev, chatMsg]); void getTextToSpeechService().speak(incomingText); break; }
       case "call_end": setCallState("idle"); setCurrentDevice(null); currentDeviceRef.current = null; setIncomingCallFrom(null); setMessages([]); break;
@@ -57,8 +80,8 @@ export function CommunicationProvider({ children }: { children: React.ReactNode 
       handledUrl = url; console.log(`[CALL FLOW 32] DEEP LINK ACCEPTED ${url}`);
       const parsed = Linking.parse(url); const ip = typeof parsed.queryParams?.ip === "string" ? parsed.queryParams.ip : ""; const name = typeof parsed.queryParams?.name === "string" ? parsed.queryParams.name : "iTantra device"; console.log(`[CALL FLOW 33] parsed ip=${ip} name=${name}`); if (!ip) { console.error("[CALL FLOW 34] ABORT: no IP"); return; }
       const remote: Device = { id: `remote-${ip}`, name, ip, port: TCP_PORT, status: "connected", lastSeen: Date.now() };
-      try { autoConnecting.current = true; currentDeviceRef.current = remote; setCurrentDevice(remote); setIncomingCallFrom(null); setMessages([]); setCallState("calling"); console.log("[CALL FLOW 35] state=calling; navigating /communication"); router.replace("/communication"); console.log("[CALL FLOW 36] router.replace returned"); await new Promise((resolve) => setTimeout(resolve, 700)); console.log(`[CALL FLOW 37] callee reconnect START ${ip}:${TCP_PORT}`); await tcp.connectToDevice(ip, TCP_PORT); console.log("[CALL FLOW 38] callee reconnect SUCCESS"); setCallState("connected"); console.log("[CALL FLOW 39] state=connected"); }
-      catch (error) { console.error("[CALL FLOW 40] callee handoff/reconnect FAILED", error); setCallState("idle"); setCurrentDevice(null); currentDeviceRef.current = null; }
+      try { autoConnecting.current = true; currentDeviceRef.current = remote; setCurrentDevice(remote); setIncomingCallFrom(null); setMessages([]); setCallState("calling"); console.log("[CALL FLOW 35] state=calling; navigating /communication"); router.replace("/communication"); console.log("[CALL FLOW 36] router.replace returned"); await new Promise((resolve) => setTimeout(resolve, 300)); await connectWithRetry(tcp, ip, TCP_PORT, "callee reconnect"); console.log("[CALL FLOW 38] callee reconnect SUCCESS"); setCallState("connected"); console.log("[CALL FLOW 39] state=connected"); }
+      catch (error) { console.error("[CALL FLOW 40] callee handoff/reconnect FAILED after retries", error); setCallState("disconnected"); }
       finally { autoConnecting.current = false; console.log("[CALL FLOW 41] deep-link handler FINISHED"); }
     };
     console.log("[CALL FLOW 29] Registering Expo Linking handlers"); void Linking.getInitialURL().then((url) => { console.log(`[CALL FLOW 29A] getInitialURL=${url}`); return handleUrl(url); }); const subscription = Linking.addEventListener("url", ({ url }) => { console.log(`[CALL FLOW 29B] URL event=${url}`); void handleUrl(url); }); return () => { console.log("[CALL FLOW CLEANUP] Removing Linking listener"); subscription.remove(); };
@@ -71,7 +94,9 @@ export function CommunicationProvider({ children }: { children: React.ReactNode 
   const endCall = useCallback(async () => { if (!tcp) return; console.log("[CALL FLOW] endCall() invoked"); try { if (tcp.isConnected()) await tcp.sendMessage({ type: "call_end", senderId: deviceId, timestamp: Date.now() }); } catch {} await tcp.disconnect(); setCallState("idle"); setCurrentDevice(null); currentDeviceRef.current = null; setIncomingCallFrom(null); setMessages([]); }, [tcp, deviceId]);
   const refreshDiscovery = useCallback(() => { console.log("[CALL FLOW] refreshDiscovery() invoked"); setDevices([]); setRefreshVersion((value) => value + 1); }, []);
   const sendMessage = useCallback(async (text: string) => { const trimmed = text.trim(); if (!tcp || !trimmed || !tcp.isConnected()) return; const msg: SpeechMessage = { type: "speech_message", id: generateUUID(), senderId: deviceId, text: trimmed, timestamp: Date.now() }; console.log(`[CALL FLOW MESSAGE] sending ${JSON.stringify(trimmed)}`); await tcp.sendMessage(msg); setMessages((prev) => prev.some((item) => item.id === msg.id) ? prev : [...prev, { id: msg.id, senderId: deviceId, senderName: deviceName || "You", text: trimmed, timestamp: msg.timestamp }]); }, [tcp, deviceId, deviceName]);
-  const startSpeechRecognition = useCallback(async () => { const text = await getSpeechToTextService().listenForSpeech(); if (text?.trim()) await sendMessage(text); }, [sendMessage]); const stopSpeechRecognition = useCallback(async () => { await getSpeechToTextService().stopListening(); }, []); const cleanup = useCallback(async () => { console.log("[CALL FLOW] cleanup() invoked"); await tcp?.cleanup(); discovery?.cleanup(); await getSpeechToTextService().cleanup(); await getTextToSpeechService().cleanup(); }, [tcp, discovery]);
+  const startSpeechRecognition = useCallback(async () => { const text = await getSpeechToTextService().listenForSpeech(); if (text?.trim()) await sendMessage(text); }, [sendMessage]);
+  const stopSpeechRecognition = useCallback(async () => { await getSpeechToTextService().stopListening(); }, []);
+  const cleanup = useCallback(async () => { console.log("[CALL FLOW] cleanup() invoked"); await tcp?.cleanup(); discovery?.cleanup(); await getSpeechToTextService().cleanup(); await getTextToSpeechService().cleanup(); }, [tcp, discovery]);
   return <CommunicationContext.Provider value={{ devices, scanStatus, callState, messages, currentDevice, localDeviceId: deviceId, localDeviceName: deviceName, isConnected, incomingCallFrom, callDevice, cancelCall, acceptCall, rejectCall, endCall, refreshDiscovery, sendMessage, startSpeechRecognition, stopSpeechRecognition, cleanup }}>{children}</CommunicationContext.Provider>;
 }
 export function useCommunication() { const context = React.useContext(CommunicationContext); if (!context) throw new Error("useCommunication must be used within CommunicationProvider"); return context; }
