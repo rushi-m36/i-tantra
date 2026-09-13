@@ -85,7 +85,6 @@ export function CommunicationProvider({ children }: { children: React.ReactNode 
 
   useEffect(() => {
     let active = true;
-    let initialUrlPromise: Promise<void> | null = null;
     const handleUrl = async (url: string | null) => {
       if (!active) { console.log("[CALL FLOW 29] Ignoring URL from inactive provider"); return; }
       console.log(`[CALL FLOW 30] handleUrl invoked url=${url}`);
@@ -93,21 +92,24 @@ export function CommunicationProvider({ children }: { children: React.ReactNode 
       const now = Date.now();
       const previousHandledAt = handledIncomingCallUrls.get(url);
       if (previousHandledAt && now - previousHandledAt < INCOMING_CALL_DEDUPE_MS) { console.log(`[CALL FLOW 31] URL ignored: already handled ${now - previousHandledAt}ms ago`); return; }
-      handledIncomingCallUrls.set(url, now);
       const parsed = Linking.parse(url); const ip = typeof parsed.queryParams?.ip === "string" ? parsed.queryParams.ip : ""; const name = typeof parsed.queryParams?.name === "string" ? parsed.queryParams.name : "iTantra device";
-      if (!ip) { handledIncomingCallUrls.delete(url); return; }
+      if (!ip) return;
       const remote: Device = { id: `remote-${ip}`, name, ip, port: TCP_PORT, status: "connected", lastSeen: Date.now() };
       try {
         if (!active) return;
         autoConnecting.current = true; currentDeviceRef.current = remote; callStateRef.current = "calling"; setCurrentDevice(remote); setIncomingCallFrom(null); setMessages([]); setCallState("calling");
-        console.log("[CALL FLOW 35] state=calling; navigating /communication"); router.replace("/communication");
+        console.log("[CALL FLOW 35] state=calling; navigating /communication");
+        router.replace("/communication");
+        // Navigation can remount CommunicationProvider. Do not claim the URL is handled
+        // until the reconnect succeeds, so the new provider can take over via getInitialURL().
         await new Promise(resolve => setTimeout(resolve, 300));
-        if (!active) { console.log("[CALL FLOW 36] provider became inactive during handoff; aborting stale reconnect"); return; }
+        if (!active) { console.log("[CALL FLOW 36] provider became inactive during handoff; new provider may take over"); return; }
         const reconnectService = tcpRef.current;
         console.log(`[CALL FLOW 37] reconnect service available=${!!reconnectService} providerTcpChanged=${reconnectService !== tcp}`);
         if (!reconnectService) throw new Error("TCPService unavailable after communication screen handoff");
         await connectWithRetry(reconnectService, ip, TCP_PORT, "callee reconnect");
         if (!active) return;
+        handledIncomingCallUrls.set(url, Date.now());
         setCallState("connected"); callStateRef.current = "connected"; console.log("[CALL FLOW 39] state=connected");
       } catch (error) {
         if (!active) return;
@@ -115,7 +117,7 @@ export function CommunicationProvider({ children }: { children: React.ReactNode 
       } finally { autoConnecting.current = false; if (active) console.log("[CALL FLOW 41] deep-link handler FINISHED"); }
     };
     console.log("[CALL FLOW 29] Registering Expo Linking handlers");
-    initialUrlPromise = Linking.getInitialURL().then(handleUrl).catch(error => { if (active) console.error("[CALL FLOW 32] getInitialURL FAILED", error); });
+    const initialUrlPromise = Linking.getInitialURL().then(handleUrl).catch(error => { if (active) console.error("[CALL FLOW 32] getInitialURL FAILED", error); });
     const subscription = Linking.addEventListener("url", ({ url }) => { void handleUrl(url); });
     return () => { active = false; subscription.remove(); void initialUrlPromise; };
   }, [tcp]);
