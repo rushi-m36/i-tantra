@@ -1,5 +1,3 @@
-import { useRouter } from "expo-router";
-import { useEffect } from "react";
 import { DeviceEventEmitter, Text, TouchableOpacity, View } from "react-native";
 import "../../global.css";
 import { BottomNav } from "../components/BottomNav";
@@ -16,7 +14,6 @@ export default function App() {
     setTimeout(() => DeviceEventEmitter.emit("itantraRefreshDiscovery"), 0);
   };
 
-  const isScanning = scanStatus.phase === "nsd";
   const showStartButton = callState === "idle" && scanStatus.phase === "idle";
 
   return (
