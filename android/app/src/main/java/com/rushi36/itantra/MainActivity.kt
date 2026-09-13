@@ -24,12 +24,28 @@ class MainActivity : ReactActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     SplashScreenManager.registerOnActivity(this)
     super.onCreate(null)
+    handleIncomingCallIntent(intent)
 
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
       checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
     ) {
       requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1001)
     }
+  }
+
+  override fun onNewIntent(intent: Intent?) {
+    super.onNewIntent(intent)
+    setIntent(intent)
+    handleIncomingCallIntent(intent)
+  }
+
+  private fun handleIncomingCallIntent(intent: Intent?) {
+    if (intent?.data?.scheme != "itantra" || intent.data?.host != "incoming-call") return
+
+    // Re-deliver the deep link to React Native after MainActivity is reused.
+    // React Native/Expo can consume the activity intent through Linking.getInitialURL()
+    // or the URL event depending on lifecycle timing.
+    intent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
   }
 
   override fun onResume() {
